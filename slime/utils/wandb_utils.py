@@ -14,7 +14,53 @@ def _is_offline_mode(args) -> bool:
     return os.environ.get("WANDB_MODE") == "offline"
 
 
+from functools import wraps
+
+def with_proxy(proxy_url="http://hk-mmhttpproxy.woa.com:11113/"):
+    """装饰器：临时设置代理"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 保存原始环境变量
+            original_env = {
+                'http_proxy': os.environ.get('http_proxy'),
+                'https_proxy': os.environ.get('https_proxy'),
+                'all_proxy': os.environ.get('all_proxy'),
+                'HTTP_PROXY': os.environ.get('HTTP_PROXY'),
+                'HTTPS_PROXY': os.environ.get('HTTPS_PROXY'),
+                'ALL_PROXY': os.environ.get('ALL_PROXY'),
+            }
+            
+            try:
+                # 设置代理
+                os.environ['http_proxy'] = proxy_url
+                os.environ['https_proxy'] = proxy_url
+                os.environ['all_proxy'] = proxy_url
+                os.environ['HTTP_PROXY'] = proxy_url
+                os.environ['HTTPS_PROXY'] = proxy_url
+                os.environ['ALL_PROXY'] = proxy_url
+                
+                print(f"Proxy enabled for {func.__name__}: {proxy_url}")
+                
+                # 执行函数
+                result = func(*args, **kwargs)
+                return result
+                
+            finally:
+                # 恢复原始环境变量
+                for key, value in original_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+                print(f"Proxy settings restored after {func.__name__}")
+        
+        return wrapper
+    return decorator
+
+@with_proxy()
 def init_wandb_primary(args):
+    # 原始函数内容保持不变
     if not args.use_wandb:
         return None
 
@@ -73,6 +119,7 @@ def init_wandb_primary(args):
 
 
 # https://docs.wandb.ai/guides/track/log/distributed-training/#track-all-processes-to-a-single-run
+@with_proxy()
 def init_wandb_secondary(args, wandb_run_id):
     if wandb_run_id is None:
         return
@@ -114,7 +161,7 @@ def init_wandb_secondary(args, wandb_run_id):
 
     _init_wandb_common()
 
-
+@with_proxy()
 def _init_wandb_common():
     wandb.define_metric("train/step")
     wandb.define_metric("train/*", step_metric="train/step")
@@ -125,8 +172,9 @@ def _init_wandb_common():
     wandb.define_metric("eval/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
     wandb.define_metric("perf/*", step_metric="rollout/step")
-
-
+    wandb.define_metric("reward/*", step_metric="rollout/step")
+    
+@with_proxy()
 def get_wandb_offline_dir(args):
     """Get the directory where offline W&B data is stored."""
     if _is_offline_mode(args):

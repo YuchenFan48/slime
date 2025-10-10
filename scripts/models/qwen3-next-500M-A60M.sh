@@ -1,4 +1,4 @@
-NLAYERS=48
+NLAYERS=24
 FIRST_K_DENSE_REPLACE=0
 
 arr=()
@@ -19,17 +19,17 @@ MODEL_ARGS=(
    --disable-bias-linear
    --qk-layernorm
    --group-query-attention
-   --num-attention-heads 16
+   --num-attention-heads 12
    --num-query-groups 2
-   --kv-channels 256
-   --num-layers 48
-   --hidden-size 2048
-   --ffn-hidden-size 5120
+   --kv-channels 128
+   --num-layers 24
+   --hidden-size 384
+   --ffn-hidden-size 3840
 
    --normalization RMSNorm
    --apply-layernorm-1p
    --position-embedding-type rope
-   --norm-epsilon 1e-6
+   --norm-epsilon 1e-06
    --rotary-percent 0.25
    --swiglu
    --untie-embeddings-and-output-weights
@@ -38,16 +38,16 @@ MODEL_ARGS=(
    --rotary-base 10000000
 
    # moe
-   --moe-ffn-hidden-size 512
-   --moe-shared-expert-intermediate-size 512
+   --moe-ffn-hidden-size 384
+   --moe-shared-expert-intermediate-size 384
    --moe-router-score-function softmax
    --moe-token-dispatcher-type alltoall
-   --moe-router-topk 10
+   --moe-router-topk 6
    --moe-layer-freq $MOE_LAYER_FREQ
-   --num-experts 512
+   --num-experts 12
    --moe-grouped-gemm
    --moe-token-drop-policy probs
    --moe-router-dtype fp32
    --moe-permute-fusion
-   --moe-aux-loss-coeff 0
+   --moe-aux-loss-coeff 0.001
 )
