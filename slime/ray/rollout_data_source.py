@@ -1,6 +1,8 @@
 import copy
 import os
 from pathlib import Path
+import glob
+import time
 
 import torch
 from transformers import AutoTokenizer
@@ -16,70 +18,111 @@ class RolloutDataSource:
         self.args = args
 
         self.epoch_id = 0
+        self.sample_group_index = 0
         self.sample_index = 0
         self.sample_offset = 0
         # TODO remove this
         self.metadata = {}
 
-        if args.rollout_global_dataset:
-            tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        # Check if the prompt_data is a directory and find all .jsonl and .parquet files
+        if os.path.isdir(args.prompt_data):
+            self.data_files = glob.glob(os.path.join(args.prompt_data, "*.jsonl")) + \
+                              glob.glob(os.path.join(args.prompt_data, "*.parquet"))
+        else:
+            self.data_files = [args.prompt_data]  # If it's not a directory, treat it as a single file
 
-            # TODO move (during the refactor)
-            if (d := args.dump_details) is not None:
-                tokenizer.save_pretrained(Path(d) / "tokenizer")
+        self.dataset = None
+        self.current_file_index = 0
 
+        # Load the tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+        # TODO move (during the refactor)
+        if (d := args.dump_details) is not None:
+            self.tokenizer.save_pretrained(Path(d) / "tokenizer")
+
+        # Initialize the dataset for the first file
+        self.load_next_file(self.tokenizer)
+
+    def load_next_file(self, tokenizer):
+        """Load the next file and initialize the dataset"""
+        if self.current_file_index < len(self.data_files):
+            file_path = self.data_files[self.current_file_index]
+            print(f"file path:{file_path}")
             self.dataset = Dataset(
-                args.prompt_data,
-                tokenizer=tokenizer,
-                max_length=args.rollout_max_prompt_len,
-                prompt_key=args.input_key,
-                label_key=args.label_key,
-                metadata_key=args.metadata_key,
-                tool_key=args.tool_key,
-                apply_chat_template=args.apply_chat_template,
-                seed=args.rollout_seed,
+                file_path,
+                tokenizer=self.tokenizer,
+                max_length=self.args.rollout_max_prompt_len,
+                prompt_key=self.args.input_key,
+                label_key=self.args.label_key,
+                metadata_key=self.args.metadata_key,
+                tool_key=self.args.tool_key,
+                apply_chat_template=self.args.apply_chat_template,
+                seed=self.args.rollout_seed,
             )
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
+            self.current_file_index += 1
         else:
             self.dataset = None
+        print(f"self.dataset size: {len(self.dataset.samples)}")
 
     def get_samples(self, num_samples):
+        start = time.time()
+        prompt_samples = []
+        remaining_samples = num_samples
+
+        while remaining_samples > 0:
+            if self.dataset is not None:
+                # Check if enough samples can be taken from the current dataset
+                if self.sample_offset + remaining_samples <= len(self.dataset.samples):
+                    prompt_samples += self.dataset.samples[self.sample_offset: self.sample_offset + remaining_samples]
+                    self.sample_offset += remaining_samples
+                    remaining_samples = 0  # All requested samples have been taken
+                else:
+                    # Take all remaining samples from the current file
+                    remaining_in_file = len(self.dataset.samples) - self.sample_offset
+                    prompt_samples += self.dataset.samples[self.sample_offset:]
+                    remaining_samples -= remaining_in_file
+                    self.sample_offset = len(self.dataset.samples)  # All samples from the current file are consumed
+
+                    # If the current file is exhausted, load the next file
+                    if self.sample_offset >= len(self.dataset.samples):
+                        # Load the next file if available
+                        self.load_next_file(self.tokenizer)
+                        if self.dataset is None:
+                            break  # No more files to process
+
+                        # Shuffle the dataset for the new file if required
+                        if self.args.rollout_shuffle:
+                            self.dataset.shuffle(self.epoch_id)
+
+                        self.sample_offset = 0
+            # If we run out of samples in the current file and still need more, continue processing files
+            if len(prompt_samples) < num_samples:
+                continue  # Go to the next iteration to process additional files if needed
+
+        # After all files in the current epoch are processed, increment epoch_id
+        if self.current_file_index >= len(self.data_files):
+            self.epoch_id += 1
+            self.current_file_index = 0  # Reset file index to start from the first file in the next epoch
+
+        # Prepare the samples for returning
         samples = []
-
-        # TODO unify the two branches
-        if self.dataset is not None:
-            if self.sample_offset + num_samples <= len(self.dataset):
-                prompt_samples = self.dataset.samples[self.sample_offset : self.sample_offset + num_samples]
-                self.sample_offset += num_samples
-            else:
-                prompt_samples = self.dataset.samples[self.sample_offset :]
-                num_samples -= len(prompt_samples)
-                self.epoch_id += 1
-                if self.args.rollout_shuffle:
-                    self.dataset.shuffle(self.epoch_id)
-                prompt_samples += self.dataset.samples[:num_samples]
-                self.sample_offset = num_samples
-            for prompt_sample in prompt_samples:
-                group = []
-                for _ in range(self.args.n_samples_per_prompt):
-                    sample = copy.deepcopy(prompt_sample)
-                    sample.index = self.sample_index
-                    self.sample_index += 1
-                    group.append(sample)
-                samples.append(group)
-        else:
-            for _ in range(num_samples):
-                group = []
-                for _ in range(self.args.n_samples_per_prompt):
-                    sample = Sample(
-                        index=self.sample_index,
-                    )
-                    self.sample_index += 1
-                    group.append(sample)
-                samples.append(group)
-
+        for prompt_sample in prompt_samples:
+            group = []
+            for _ in range(self.args.n_samples_per_prompt):
+                sample = copy.deepcopy(prompt_sample)
+                sample.group_index = self.sample_group_index
+                sample.index = self.sample_index
+                self.sample_index += 1
+                group.append(sample)
+            self.sample_group_index += 1
+            samples.append(group)
+        end = time.time()
+        print(f"Time need: {end - start}")
         return samples
+
 
     def add_samples(self, samples: list[list[Sample]]):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
@@ -91,6 +134,7 @@ class RolloutDataSource:
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,
+            "sample_group_index": self.sample_group_index,
             "sample_index": self.sample_index,
             "metadata": self.metadata,
         }
@@ -115,6 +159,7 @@ class RolloutDataSource:
         state_dict = torch.load(path)
         self.sample_offset = state_dict.get("sample_offset", 0)
         self.epoch_id = state_dict.get("epoch_id", 0)
+        self.sample_group_index = state_dict.get("sample_group_index", 0)
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
 

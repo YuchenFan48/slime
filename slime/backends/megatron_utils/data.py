@@ -227,7 +227,6 @@ def get_data_iterator(args, model, rollout_data):
                 for k in range(len(partitions[j])):
                     partitions[j][k] += start
             micro_batch_indices.extend(partitions)
-
         assert len(set(sum(micro_batch_indices, []))) == num_local_samples
 
         data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)

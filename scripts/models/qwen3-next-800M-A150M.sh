@@ -44,10 +44,13 @@ MODEL_ARGS=(
    --moe-token-dispatcher-type alltoall
    --moe-router-topk 6
    --moe-layer-freq $MOE_LAYER_FREQ
-   --num-experts 12
+   --num-experts 48
    --moe-grouped-gemm
    --moe-token-drop-policy probs
    --moe-router-dtype fp32
    --moe-permute-fusion
    --moe-aux-loss-coeff 0.001
 )
+
+# vocab size 151936 * 384 = 58M
+# attention w -> 

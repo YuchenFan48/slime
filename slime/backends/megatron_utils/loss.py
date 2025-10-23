@@ -60,7 +60,6 @@ def get_responses(
 
             logits_chunk = torch.cat([logits_0, logits_1], dim=0)
             tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
-
         yield logits_chunk, tokens_chunk
 
 
@@ -86,7 +85,6 @@ def get_log_probs_and_entropy(
         log_prob, entropy = calculate_log_probs_and_entropy(
             logits_chunk, tokens_chunk, mpu.get_tensor_model_parallel_group(), with_entropy=with_entropy
         )
-
         log_probs_list.append(log_prob.squeeze(-1))
         entropy_list.append(entropy)
 
@@ -109,6 +107,7 @@ def get_values(
     non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
     value_list = []
+    
     for logits_chunk, _ in get_responses(
         logits,
         args=args,

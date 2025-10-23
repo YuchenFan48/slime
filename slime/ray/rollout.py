@@ -35,7 +35,6 @@ class RolloutManager:
         _start_router(args)
         init_wandb_secondary(args, wandb_run_id)
         init_http_client(args)
-
         self.data_source = RolloutDataSourceWithBuffer(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
@@ -88,12 +87,20 @@ class RolloutManager:
                 self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
 
     def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
+        # if self.args.debug_train_only:
+        #     # if debug train only, we don't generate evaluation data
+        #     return
         # TODO: add fault tolerance to eval
-        data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
-        _log_eval_rollout_data(rollout_id, self.args, data)
+        data, _ = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
+        # 对每个值先进行转换，然后将转换后的结果放入 Ray
+        processed_ray_refs = {
+            k: Box(ray.put(self._convert_samples_to_train_data(v)))
+            for k, v in data.items()
+        }
+        
+        # 返回包含 ObjectRefs 的字典
+        return processed_ray_refs
+        # _log_eval_rollout_data(rollout_id, self.args, data)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)

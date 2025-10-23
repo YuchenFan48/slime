@@ -42,6 +42,9 @@ def get_optimizer_param_scheduler(args, optimizer):
     else:
         lr_warmup_steps = args.lr_warmup_iters * args.global_batch_size
 
+    with open('test.log', 'a') as f:
+        f.write(f'lr_warmup_steps: {lr_warmup_steps}\n')
+        f.write(f'wsd_decay_steps: {wsd_decay_steps}\n')
     opt_param_scheduler = OptimizerParamScheduler(
         optimizer,
         init_lr=args.lr_warmup_init,

@@ -15,7 +15,7 @@ from slime.utils.http_utils import get, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.types import Sample
 
-from .rm_hub import async_rm, batched_async_rm
+ .rm_hub import async_rm, batched_async_rm
 
 __all__ = ["generate_rollout"]
 

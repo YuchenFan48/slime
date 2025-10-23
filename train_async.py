@@ -10,7 +10,6 @@ def train(args):
     # allocate the GPUs
     pgs = create_placement_groups(args)
     wandb_run_id = init_wandb_primary(args)
-    print(args)
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, wandb_run_id=wandb_run_id)
 

@@ -102,6 +102,7 @@ class Dataset:
         return self.samples[idx]
 
     def __len__(self):
+        return 1
         return len(self.samples)
 
 
