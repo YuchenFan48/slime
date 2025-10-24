@@ -19,7 +19,7 @@ export PYTHONBUFFERED=16
 MODEL_NAME="qwen3-next"
 TOTAL_PARAMS="2B"
 ACTIVE_PARAMS="0.5B"  # Inferred from A0.5B in file paths
-LEARNING_RATE="2e-3"      # From OPTIMIZER_ARGS
+LEARNING_RATE="1e-3"      # From OPTIMIZER_ARGS
 GLOBAL_BATCH_SIZE="1024"   # From SFT_ARGS
 
 WANDB_RUN_NAME="${MODEL_NAME}-${TOTAL_PARAMS}-A${ACTIVE_PARAMS}-lr${LEARNING_RATE}-bsz${GLOBAL_BATCH_SIZE}"
@@ -36,23 +36,23 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-next-2B-A0.5B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B
-   #--hf-checkpoint /mnt/cephfs/users/yuchenfan/qwen-3-next-FP8
-   --ref-load /mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-torch_dist
-   --load /mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-pretrain-lr-2e-3-50B-lr-decay-head-256-wsd-fix-train-std-linear-min-lr-0-replace-last/
-   --save /mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-pretrain-lr-2e-3-50B-lr-decay-head-256-wsd-fix-train-std-linear-min-lr-0-replace-last/
+   --hf-checkpoint /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B
+   #--hf-checkpoint /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-FP8
+   --ref-load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-torch_dist
+   --load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-pretrain-lr-1e-3-50B-lr-decay-head-256-wsd-fix-train-std-linear-min-lr-0/
+   --save /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-pretrain-lr-1e-3-50B-lr-decay-head-256-wsd-fix-train-std-linear-min-lr-0-/
    --save-interval 4096
 )
 
 
 EVAL_ARGS=(
    --eval-interval 512
-   --eval-prompt-data c4 /mnt/cephfs/users/yuchenfan/pretraining/ppl_data/c4/validation_sample_truncated.jsonl pes2o /mnt/cephfs/users/yuchenfan/pretraining/ppl_data/pes2o/validation_sample_truncated.jsonl pile /mnt/cephfs/users/yuchenfan/pretraining/ppl_data/pile/validation_sample_truncated.jsonl s2orc /mnt/cephfs/users/yuchenfan/pretraining/ppl_data/s2orc/validation_sample_truncated.jsonl
+   --eval-prompt-data c4 /apdcephfs/mnt/cephfs/users/yuchenfan/pretraining/ppl_data/c4/validation_sample_truncated.jsonl pes2o /apdcephfs/mnt/cephfs/users/yuchenfan/pretraining/ppl_data/pes2o/validation_sample_truncated.jsonl pile /apdcephfs/mnt/cephfs/users/yuchenfan/pretraining/ppl_data/pile/validation_sample_truncated.jsonl s2orc /apdcephfs/mnt/cephfs/users/yuchenfan/pretraining/ppl_data/s2orc/validation_sample_truncated.jsonl
 )
 
 SFT_ARGS=(
    --rollout-function-path slime.rollout.sft_rollout.generate_rollout
-   --prompt-data /mnt/cephfs/users/yuchenfan/pretraining/train_data/dolmino-mix-1124/processed_data
+   --prompt-data /apdcephfs/mnt/cephfs/users/yuchenfan/pretraining/train_data/dolmino-mix-1124/processed_data
    --input-key text
    --rollout-shuffle
    --num-rollout 10000
@@ -84,7 +84,7 @@ PERF_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 2e-3
+   --lr 1e-3
    --lr-decay-style WSD
    --lr-wsd-decay-style exponential
    --lr-wsd-decay-iters 2000
@@ -115,6 +115,12 @@ MISC_ARGS=(
    # need to comment this when using model with MLA
    --attention-backend flash
 )
+
+# MTP_TRAINING_ARGS=(
+#    --enable-mtp-training
+#    --mtp-loss-scaling-factor 0.1
+#    --mtp-num-layers 2
+# )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -153,4 +159,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${EVAL_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
-   ${MISC_ARGS[@]} 
+   ${MISC_ARGS[@]}  \
+   ${MTP_TRAINING_ARGS[@]}

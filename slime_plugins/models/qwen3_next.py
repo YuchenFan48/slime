@@ -180,7 +180,7 @@ class Attention(HuggingfaceAttention):
         )
         if Qwen3NextAttention is None:
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
-
+        print(self.hf_config.layer_types)
         self.layer_type = self.hf_config.layer_types[self.hf_layer_idx]
         if self.layer_type == "linear_attention":
             self.linear_attn = Qwen3NextGatedDeltaNet(self.hf_config, self.hf_layer_idx)

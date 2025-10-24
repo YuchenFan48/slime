@@ -178,12 +178,33 @@ def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix="
         packed_seq_params = batch["packed_seq_params"]
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
+        position_ids = None
+        labels = None
+        extra_block_kwargs = None
+        loss_mask = None
+        # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
+        # for the target model's loss. Detach base hidden states for MTP so MTP gradients
+        # do not update the main model.
+        if getattr(args, "enable_mtp_training", False):
+            # We have to set labels to tokens for MTP training, to point out samples to train.
+            labels = batch["tokens"]
+            # Temporary disable loss_mask settings for MTP training.
+            loss_mask = None
+            # Keep position_ids=None to make RoPE work with sequence packing.
+            position_ids = None
+            extra_block_kwargs = {
+                "mtp_return_logits_when_labels": True,
+                "mtp_detach_hidden_states": True,
+            }
+
         output_tensor = model(
-            input_ids=tokens,
-            position_ids=None,
+            input_ids=batch["tokens"],
+            position_ids=position_ids,
             attention_mask=None,
-            labels=None,
-            packed_seq_params=packed_seq_params,
+            labels=labels,
+            packed_seq_params=batch["packed_seq_params"],
+            loss_mask=loss_mask,
+            extra_block_kwargs=extra_block_kwargs,
         )
 
         return output_tensor, partial(

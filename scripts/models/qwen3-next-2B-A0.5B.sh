@@ -50,6 +50,8 @@ MODEL_ARGS=(
    --moe-router-dtype fp32
    --moe-permute-fusion
    --moe-aux-loss-coeff 0.001
+  #  --post_self_attn_layernorm
+  #  --post_mlp_layernorm
 )
 
 # vocab size 151936 * 384 = 58M

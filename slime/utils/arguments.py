@@ -7,6 +7,19 @@ from transformers import AutoConfig
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 
+def reset_megatron_args(parser, name, type, default):
+    """
+    Reset the default value of a Megatron argument.
+    :param parser: The argument parser.
+    :param name: The name of the argument to reset.
+    :param default: The new default value.
+    """
+    for action in parser._actions:
+        if name in action.option_strings:
+            action.default = default
+            break
+    else:
+        parser.add_argument(name, type=type, default=default)
 
 def reset_arg(parser, name, **kwargs):
     """
@@ -915,6 +928,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             return parser
+            
+        def add_mtp_training_arguments(parser):
+            """Add MTP training specific arguments."""
+            parser.add_argument(
+                "--enable-mtp-training",
+                action="store_true",
+                default=False,
+                help="Enable MTP layer parameter updates during training"
+            )
+            reset_megatron_args(parser, "--mtp-loss-scaling-factor", float, 0.2)
+            return parser
 
         def add_ci_arguments(parser):
             parser.add_argument(
@@ -944,6 +968,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         # For megatron
         parser = add_custom_megatron_plugins_arguments(parser)
+        parser = add_mtp_training_arguments(parser)
         try:
             parser.add_argument("--padded-vocab-size", type=int, default=None)
         except:
