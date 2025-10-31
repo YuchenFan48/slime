@@ -332,36 +332,26 @@ class MegatronTrainRayActor(TrainRayActor):
                 )
 
             self.prof.after_actor_train_step(rollout_id=rollout_id)
-
-                
+        
         if (path_template := self.args.save_debug_train_data) is not None:
             import time
             from pathlib import Path
-
+        
             rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
-
+        
             path_str = path_template.format(rollout_id=rollout_id, rank=rank)
-            path = Path(path_str).resolve()
-
+            path = Path(path_str)
+        
             path.parent.mkdir(parents=True, exist_ok=True)
-
-            tmp_path = path.with_suffix(".pt.tmp")
-
-            try:
-                torch.save(
-                    {
-                        "rollout_id": rollout_id,
-                        "rank": rank,
-                        "rollout_data": rollout_data,
-                    },
-                    tmp_path,
-                )
-                tmp_path.rename(path)
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                raise
-
+        
+            torch.save(
+                {
+                    "rollout_id": rollout_id,
+                    "rank": rank,
+                    "rollout_data": rollout_data,
+                },
+                path,
+            )
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
