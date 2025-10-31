@@ -345,7 +345,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
             path.parent.mkdir(parents=True, exist_ok=True)
 
-            print(f"[Rank {rank}] Saving debug data to {path}")
             tmp_path = path.with_suffix(".pt.tmp")
 
             try:
