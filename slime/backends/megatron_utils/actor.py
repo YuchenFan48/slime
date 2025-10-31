@@ -333,14 +333,16 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.prof.after_actor_train_step(rollout_id=rollout_id)
 
+                
         if (path_template := self.args.save_debug_train_data) is not None:
             import time
             from pathlib import Path
 
             rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
-            path_template = path_template.replace(".pt", "_{rank}.pt")
 
-            path = Path(path_template.format(rollout_id=rollout_id, rank=rank)).resolve()
+            path_str = path_template.format(rollout_id=rollout_id, rank=rank)
+            path = Path(path_str).resolve()
+
             path.parent.mkdir(parents=True, exist_ok=True)
 
             print(f"[Rank {rank}] Saving debug data to {path}")
@@ -356,36 +358,11 @@ class MegatronTrainRayActor(TrainRayActor):
                     tmp_path,
                 )
                 tmp_path.rename(path)
-            except Exception as e:
+            except Exception:
                 import traceback
                 traceback.print_exc()
                 raise
 
-            if torch.distributed.is_initialized():
-                torch.distributed.barrier()
-            time.sleep(0.2)
-
-            # Merge all rank files only on rank 0
-            if rank == 0:
-                try:
-                    merged_data = {}
-                    base_dir = path.parent
-                    prefix = f"{rollout_id}_"
-                    merged_path = base_dir / f"{rollout_id}.pt"
-
-                    for f in sorted(base_dir.glob(f"{prefix}*.pt")):
-                        data = torch.load(f, map_location="cpu")
-                        merged_data[data["rank"]] = data["rollout_data"]
-
-                    torch.save(merged_data, merged_path)
-
-                    # Optional cleanup
-                    for f in base_dir.glob(f"{prefix}*.pt"):
-                        f.unlink()
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    raise
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
