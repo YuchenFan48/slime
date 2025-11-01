@@ -6,6 +6,34 @@ import wandb
 
 from slime.utils.timer import Timer
 
+from datetime import datetime
+import os
+
+def log_with_file(message, log_file=None, args=None):
+    """Log message to both console and file with timestamp."""
+    global _default_log_file
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"[{timestamp}] {message}"
+    print(log_message)
+    
+    # Get log file path from args if not specified
+    if log_file is None:
+        if args is not None and hasattr(args, 'log_file_path') and args.log_file_path is not None:
+            log_file = args.log_file_path
+        else:
+            # Create default path with timestamp (once per program run)
+            if _default_log_file is None:
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _default_log_file = f"training_metrics_{timestamp_str}.log"
+            log_file = _default_log_file
+    
+    # Ensure log directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)) if os.path.dirname(log_file) else ".", exist_ok=True)
+    
+    # Append to log file
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_message + "\n")
 
 def log_perf_data_raw(
     rollout_id: int, args: Namespace, is_primary_rank: bool, compute_total_fwd_flops: Callable
@@ -38,7 +66,7 @@ def log_perf_data_raw(
             log_dict["perf/step_time"] = total_time
             log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
-    print(f"perf {rollout_id}: {log_dict}")
+    log_with_file(f"perf {rollout_id}: {log_dict}", args=args)
 
     step = (
         rollout_id

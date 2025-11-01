@@ -25,6 +25,38 @@ from slime.utils.wandb_utils import init_wandb_secondary
 
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
+from datetime import datetime
+import os
+
+# Global variable for default log file path
+_default_log_file = None
+
+def log_with_file(message, log_file=None, args=None):
+    """Log message to both console and file with timestamp."""
+    global _default_log_file
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"[{timestamp}] {message}"
+    print(log_message)
+    
+    # Get log file path from args if not specified
+    if log_file is None:
+        if args is not None and hasattr(args, 'log_file_path') and args.log_file_path is not None:
+            log_file = args.log_file_path
+        else:
+            # Create default path with timestamp (once per program run)
+            if _default_log_file is None:
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _default_log_file = f"training_metrics_{timestamp_str}.log"
+            log_file = _default_log_file
+    
+    # Ensure log directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)) if os.path.dirname(log_file) else ".", exist_ok=True)
+    
+    # Append to log file
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_message + "\n")
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -101,17 +133,16 @@ class RolloutManager:
                 self.num_new_engines = 0
 
     def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
         # TODO: add fault tolerance to eval
-        data = call_rollout_fn(
-            self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True
-        ).data
-        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
-        metrics = _log_eval_rollout_data(rollout_id, self.args, data)
-        if self._metric_checker is not None:
-            self._metric_checker.on_eval(metrics)
+        data, _ = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
+        # 对每个值先进行转换，然后将转换后的结果放入 Ray
+        processed_ray_refs = {
+            k: Box(ray.put(self._convert_samples_to_train_data(v)))
+            for k, v in data.items()
+        }
+        
+        # 返回包含 ObjectRefs 的字典
+        return processed_ray_refs
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -488,7 +519,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
-    print(f"perf {rollout_id}: {log_dict}")
+    log_with_file(f"perf {rollout_id}: {log_dict}", args=args)
     step = (
         rollout_id
         if not args.wandb_always_use_train_step

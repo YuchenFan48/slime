@@ -127,7 +127,7 @@ class Dataset:
         return self.samples[idx]
 
     def __len__(self):
-        return len(self.samples)
+        return 1
 
 
 def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):

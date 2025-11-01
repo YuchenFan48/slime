@@ -18,6 +18,36 @@ from slime.utils.types import RolloutBatch
 
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
+from datetime import datetime
+import os
+# Global variable for default log file path
+_default_log_file = None
+
+def log_with_file(message, log_file=None, args=None):
+    """Log message to both console and file with timestamp."""
+    global _default_log_file
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"[{timestamp}] {message}"
+    print(log_message)
+    
+    # Get log file path from args if not specified
+    if log_file is None:
+        if args is not None and hasattr(args, 'log_file_path') and args.log_file_path is not None:
+            log_file = args.log_file_path
+        else:
+            # Create default path with timestamp (once per program run)
+            if _default_log_file is None:
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _default_log_file = f"training_metrics_{timestamp_str}.log"
+            log_file = _default_log_file
+    
+    # Ensure log directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)) if os.path.dirname(log_file) else ".", exist_ok=True)
+    
+    # Append to log file
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_message + "\n")
 
 def get_batch(
     data_iterator: "DataIterator",
@@ -113,8 +143,7 @@ def gather_log_data(
         reduced_log_dict = {
             f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
         }
-        print(f"{metric_name} {rollout_id}: {reduced_log_dict}")
-
+        log_with_file(f"{metric_name} {rollout_id}: {reduced_log_dict}", args=args)
         # Calculate step once to avoid duplication
         step = (
             rollout_id

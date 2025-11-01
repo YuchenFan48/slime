@@ -1,5 +1,7 @@
 import os
 import socket
+import math
+import wandb
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
@@ -207,7 +209,62 @@ class MegatronTrainRayActor(TrainRayActor):
                 num_microbatches,
                 store_prefix=store_prefix,
             )
+        
+    def compute_log_prob(
+        self, 
+        rollout_id: int, 
+        rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
+    ) -> None:
+        # Prepare data and run forward pass to get log_probs
+        rollout_data = self._get_rollout_data(rollout_data)
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        rollout_data.update(
+            forward_only(
+                get_log_probs_and_entropy,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+            )
+        )
+        
+        log_probs = rollout_data['log_probs']
+        
+        # Compute total log probability and token count
+        total_log_prob = 0.0
+        total_tokens = 0
+        for lp in log_probs:
+            if lp.numel() == 0:
+                continue
+            # Sum log probs (move to CPU if needed, .item() handles it)
+            total_log_prob += lp.sum().item()
+            total_tokens += lp.numel()
 
+        # Handle edge cases
+        if total_tokens == 0:
+            print(f"[Rollout {rollout_id}] Warning: No tokens found for PPL computation.")
+            ppl = float('inf')
+        else:
+            avg_neg_log_prob = -total_log_prob / total_tokens
+            
+            # Clamp to avoid overflow in exp (e.g., if avg_neg_log_prob > 700, exp overflows)
+            # Since log(1e308) ≈ 709, we cap at 700 → PPL ≈ 1e304 (still huge, but finite)
+            clamped_avg = min(avg_neg_log_prob, 700.0)
+            ppl = math.exp(clamped_avg)
+            
+            # Optional: detect NaN or inf
+            if not math.isfinite(ppl):
+                print(f"[Rollout {rollout_id}] Warning: PPL is not finite: {ppl}")
+                ppl = float('inf')
+
+        # Log results
+        log_dict = {
+            "eval/ppl": ppl,
+            "eval/step": rollout_id,
+        }
+        
+        return log_dict
+    
     def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         if self.args.offload_train:
             self.wake_up()

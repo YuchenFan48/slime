@@ -6,6 +6,11 @@ from argparse import Namespace
 from collections.abc import Callable, Sequence
 from functools import partial
 
+from datetime import datetime
+import os
+# Global variable for default log file path
+_default_log_file = None
+
 import torch
 import wandb
 from megatron.core import mpu
@@ -29,6 +34,32 @@ from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
 
+
+def log_with_file(message, log_file=None, args=None):
+    """Log message to both console and file with timestamp."""
+    global _default_log_file
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"[{timestamp}] {message}"
+    print(log_message)
+    
+    # Get log file path from args if not specified
+    if log_file is None:
+        if args is not None and hasattr(args, 'log_file_path') and args.log_file_path is not None:
+            log_file = args.log_file_path
+        else:
+            # Create default path with timestamp (once per program run)
+            if _default_log_file is None:
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _default_log_file = f"training_metrics_{timestamp_str}.log"
+            log_file = _default_log_file
+    
+    # Ensure log directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(log_file)) if os.path.dirname(log_file) else ".", exist_ok=True)
+    
+    # Append to log file
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_message + "\n")
 
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
     """Create and configure the optimizer learning-rate/weight-decay scheduler.
@@ -673,6 +704,8 @@ def train(
                 log_dict["train/step"] = accumulated_step_id
                 wandb.log(log_dict)
 
+            log_with_file(f"step {accumulated_step_id}: {log_dict}", args=args)
+            
             if args.use_tensorboard:
                 from slime.utils.tensorboard_utils import _TensorboardAdapter
 
