@@ -32,6 +32,8 @@ class RolloutDataSource:
         else:
             self.data_files = [args.prompt_data]  # If it's not a directory, treat it as a single file
 
+        self.data_files = [f for f in self.data_files if 'dclm' in f]
+        print("Number of DCLM files: ", len(self.data_files))
         self.data_files = sorted([os.path.abspath(f) for f in self.data_files])
         self.dataset = None
         self.current_file_index = 0
@@ -148,6 +150,8 @@ class RolloutDataSource:
 
 
     def load(self, rollout_id=None):
+        with open('debug.log', 'a') as f:
+            f.write("Loading data\n")
         if not self.args.rollout_global_dataset:
             return
 
@@ -158,7 +162,8 @@ class RolloutDataSource:
         if not os.path.exists(path):
             print(f"Checkpoint {path} does not exist.")
             return
-
+        with open('debug.log', 'a') as f:
+            f.write(str(path))
         print(f"load metadata from {path}")
         state_dict = torch.load(path)
         self.sample_offset = state_dict.get("sample_offset", 0)
@@ -168,7 +173,8 @@ class RolloutDataSource:
         self.metadata = state_dict.get("metadata", {})
         self.current_file_index = state_dict.get("current_file_index", 0)  # 新增
         current_file_path = state_dict.get("current_file_path", None)  # 新增
-
+        with open('debug.log', 'a' ) as f:
+            f.write(str(self.current_file_index))
         # 重新加载数据集到正确的文件位置
         if current_file_path and current_file_path in self.data_files:
             self.current_file_index = self.data_files.index(current_file_path)

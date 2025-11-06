@@ -1,0 +1,3 @@
+[2025-11-05 02:26:13] perf 24576: {'perf/rollout_time': 2.071295976638794, 'perf/longest_sample_tokens_per_sec': 1980.402630171928, 'rollout/zero_std/count_0': 1024}
+[2025-11-05 02:26:15] perf 24577: {'perf/rollout_time': 2.030588150024414, 'perf/longest_sample_tokens_per_sec': 2020.1043721990995, 'rollout/zero_std/count_0': 1024}
+[2025-11-05 02:26:16] rollout 24576: {'rollout/raw_reward': 0.0, 'rollout/total_lengths': 1112.6455078125, 'rollout/response_lengths': 1106.6455078125, 'rollout/rewards': 0.0, 'rollout/truncated': 0.0}

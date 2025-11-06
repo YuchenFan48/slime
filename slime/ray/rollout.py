@@ -148,6 +148,8 @@ class RolloutManager:
         self.data_source.save(rollout_id)
 
     def load(self, rollout_id=None):
+        with open('debug.log', 'a') as f:
+            f.write(str(rollout_id))
         self.data_source.load(rollout_id)
 
     def offload(self):
