@@ -1,5 +1,5 @@
 import copy
-
+from einops import rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,158 +9,265 @@ from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 from transformers import AutoConfig
 from transformers.activations import ACT2FN
+from typing import Any, List, Optional, Tuple, Union
+from transformers.cache_utils import Cache
+from transformers.processing_utils import Unpack
+import math
+import os
+import sys
+project_root = os.path.dirname(os.path.abspath(__file__))
+fla_path = '/mnt/shared-storage-user/p1-shared/fanyuchen/pretrain/pretrain/flash-linear-attention'
 
+# 将 fla 的根目录插入到 sys.path 的最前面
+if fla_path not in sys.path:
+    sys.path.insert(0, fla_path)
 try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
     from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextAttention, Qwen3NextRMSNorm
+    from fla.layers.utils import get_unpad_data, index_first_axis, pad_input
+    from fla.ops.kda import chunk_kda, fused_recurrent_kda
+    from fla.ops.kda.gate import fused_kda_gate
 except ImportError:
     pass
 
 from .hf_attention import HuggingfaceAttention
 
-
-# adapt from https://github.com/huggingface/transformers/blob/38a08b6e8ae35857109cedad75377997fecbf9d0/src/transformers/models/qwen3_next/modeling_qwen3_next.py#L564
-class Qwen3NextGatedDeltaNet(nn.Module):
+    
+def check_for_nan(tensor, name):
     """
-    Qwen3NextGatedDeltaNet with varlen support
+    Checks a tensor for NaN values and raises a ValueError if any are found.
     """
+    if torch.isnan(tensor).any():
+        # Create a detailed error message
+        error_message = (
+            f"NaN detected in tensor: '{name}'\n"
+            f"Tensor shape: {tensor.shape}\n"
+            f"Tensor device: {tensor.device}\n"
+            f"Tensor dtype: {tensor.dtype}\n"
+            # Printing the whole tensor can be too large, so let's find where the NaNs are
+            f"NaN locations (indices): {torch.isnan(tensor).nonzero(as_tuple=True)}"
+        )
+        # Raise the error with the detailed message
+        raise ValueError(error_message)
 
+def _init_dt_bias_like_mamba(dt_bias: nn.Parameter, dt_min: float = 0.001, dt_max: float = 0.1):
+    """
+    使用对数空间均匀初始化方法来初始化 dt_bias。
+    这是对 Mamba 模型初始化策略的模仿。
+    
+    Args:
+        dt_bias (nn.Parameter): 需要初始化的参数。
+        dt_min (float): dt 的最小值。
+        dt_max (float): dt 的最大值。
+    """
+    # 在对数空间 [log(dt_min), log(dt_max)) 中均匀采样
+    log_dt = torch.empty_like(dt_bias).uniform_(math.log(dt_min), math.log(dt_max))
+    # 通过指数函数映射回原始空间，得到正值
+    dt_bias.data = torch.exp(log_dt)
+
+class KimiDeltaAttention(nn.Module):
     def __init__(self, config, layer_idx: int):
         super().__init__()
+        self.config = config
+        self.mode = "chunk"
+
         self.hidden_size = config.hidden_size
-        self.num_v_heads = config.linear_num_value_heads
-        self.num_k_heads = config.linear_num_key_heads
-        self.head_k_dim = config.linear_key_head_dim
-        self.head_v_dim = config.linear_value_head_dim
-        self.key_dim = self.head_k_dim * self.num_k_heads
-        self.value_dim = self.head_v_dim * self.num_v_heads
+        self.conv_size = config.linear_conv_kernel_dim
+        self.head_dim = config.linear_value_head_dim
+        self.num_heads = config.linear_num_value_heads
+        self.head_k_dim = self.head_dim
+        self.num_k_heads = self.num_heads
 
-        self.conv_kernel_size = config.linear_conv_kernel_dim
         self.layer_idx = layer_idx
-        self.activation = config.hidden_act
-        self.act = ACT2FN[config.hidden_act]
-        self.layer_norm_epsilon = config.rms_norm_eps
 
-        # QKV
-        self.conv_dim = self.key_dim * 2 + self.value_dim
-        self.conv1d = ShortConvolution(
-            hidden_size=self.conv_dim,
-            bias=False,
-            kernel_size=self.conv_kernel_size,
+        assert self.mode in [
+            'chunk', 'fused_recurrent'], f"Not suppoerted mode `{self.mode}`."
+
+        projection_k_size = self.head_k_dim * self.num_k_heads
+        projection_size = self.head_dim * self.num_heads
+
+        self.q_proj = nn.Linear(
+            self.hidden_size, projection_k_size, bias=False)
+        self.k_proj = nn.Linear(
+            self.hidden_size, projection_k_size, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, projection_size, bias=False)
+
+        self.q_conv1d = ShortConvolution(
+            hidden_size=projection_k_size,
+            kernel_size=self.conv_size,
+            activation='silu',
+        )
+        self.k_conv1d = ShortConvolution(
+            hidden_size=projection_k_size,
+            kernel_size=self.conv_size,
+            activation='silu'
+        )
+        self.v_conv1d = ShortConvolution(
+            hidden_size=projection_size,
+            kernel_size=self.conv_size,
+            activation='silu'
         )
 
-        # projection of the input hidden states
-        projection_size_qkvz = self.key_dim * 2 + self.value_dim * 2
-        projection_size_ba = self.num_v_heads * 2
-        self.in_proj_qkvz = nn.Linear(self.hidden_size, projection_size_qkvz, bias=False)
-        self.in_proj_ba = nn.Linear(self.hidden_size, projection_size_ba, bias=False)
+        self.A_log = torch.nn.Parameter(torch.log(torch.empty(
+            self.num_heads, dtype=torch.float32).uniform_(1, 16)).view(1, 1, -1, 1))
 
-        # time step projection (discretization)
-        # instantiate once and copy inv_dt in init_weights of PretrainedModel
-        self.dt_bias = nn.Parameter(torch.ones(self.num_v_heads))
+        self.f_a_proj = nn.Linear(self.hidden_size, self.head_dim, bias=False)
+        self.f_b_proj = nn.Linear(self.head_dim, projection_size, bias=False)
 
-        A = torch.empty(self.num_v_heads).uniform_(0, 16)
-        self.A_log = nn.Parameter(torch.log(A))
+        self.dt_bias = nn.Parameter(
+            torch.empty(projection_size, dtype=torch.float32))
+        nn.init.uniform_(self.dt_bias, a=0.001, b=0.01)
 
-        self.norm = FusedRMSNormGated(
-            self.head_v_dim,
-            eps=self.layer_norm_epsilon,
-            activation=self.activation,
-            device=torch.cuda.current_device(),
-            dtype=config.dtype if config.dtype is not None else torch.get_current_dtype(),
-        )
+        self.b_proj = nn.Linear(self.hidden_size, self.num_heads, bias=False)
 
-        self.out_proj = nn.Linear(self.value_dim, self.hidden_size, bias=False)
+        self.g_a_proj = nn.Linear(self.hidden_size, self.head_dim, bias=False)
+        self.g_b_proj = nn.Linear(self.head_dim, projection_size, bias=False)
 
-    def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
-        """
-        Derives `query`, `key` and `value` tensors from `mixed_qkvz` and `mixed_ba`.
-        """
-
-        new_tensor_shape_qkvz = mixed_qkvz.size()[:-1] + (
-            self.num_k_heads,
-            2 * self.head_k_dim + 2 * self.head_v_dim * self.num_v_heads // self.num_k_heads,
-        )
-        new_tensor_shape_ba = mixed_ba.size()[:-1] + (self.num_k_heads, 2 * self.num_v_heads // self.num_k_heads)
-
-        mixed_qkvz = mixed_qkvz.view(*new_tensor_shape_qkvz)
-        mixed_ba = mixed_ba.view(*new_tensor_shape_ba)
-        split_arg_list_qkvz = [
-            self.head_k_dim,
-            self.head_k_dim,
-            (self.num_v_heads // self.num_k_heads * self.head_v_dim),
-            (self.num_v_heads // self.num_k_heads * self.head_v_dim),
-        ]
-        split_arg_list_ba = [self.num_v_heads // self.num_k_heads, self.num_v_heads // self.num_k_heads]
-        query, key, value, z = torch.split(mixed_qkvz, split_arg_list_qkvz, dim=3)
-        b, a = torch.split(mixed_ba, split_arg_list_ba, dim=3)
-        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
-        value = value.reshape(value.size(0), value.size(1), -1, self.head_v_dim)
-        z = z.reshape(z.size(0), z.size(1), -1, self.head_v_dim)
-        b = b.reshape(b.size(0), b.size(1), self.num_v_heads)
-        a = a.reshape(a.size(0), a.size(1), self.num_v_heads)
-        return query, key, value, z, b, a
+        self.o_norm = FusedRMSNormGated(
+            self.head_dim, eps=config.rms_norm_eps, activation='sigmoid')
+        self.o_proj = nn.Linear(projection_size, self.hidden_size, bias=False)
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        cu_seqlens: torch.Tensor = None,
+        hidden_states,
+        cu_seqlens,
+        cache_params=None,
+        **kwargs
     ):
-        projected_states_qkvz = self.in_proj_qkvz(hidden_states)
-        projected_states_ba = self.in_proj_ba(hidden_states)
-        query, key, value, z, b, a = self.fix_query_key_value_ordering(projected_states_qkvz, projected_states_ba)
-        query, key, value = (x.reshape(x.shape[0], x.shape[1], -1) for x in (query, key, value))
+        # 检查输入
+        if check_for_nan(hidden_states, "input hidden_states"):
+            return hidden_states  # 返回原值以便调试
+        
+        use_cache = cache_params is not None
+        batch_size, q_len, _ = hidden_states.shape
+        mode = 'fused_recurrent' if q_len <= 64 else self.mode
+        if self.training:
+            assert mode == 'chunk', "Only chunk mode is supported in training."
 
-        mixed_qkv = torch.cat((query, key, value), dim=-1)
+        cu_seqlens = kwargs.get('cu_seqlens', None)
+        indices = None
 
-        mixed_qkv, _ = self.conv1d(
-            x=mixed_qkv,
-            cu_seqlens=cu_seqlens,
+        conv_state_q, conv_state_k, conv_state_v = None, None, None
+        recurrent_state = None
+        if cache_params is not None:
+            if cache_params.conv_states[self.layer_idx] is not None:
+                conv_state_q, conv_state_k, conv_state_v = cache_params.conv_states[
+                    self.layer_idx]
+            recurrent_state = cache_params.recurrent_states[self.layer_idx]
+        
+        # 检查投影层输出
+        q_proj = self.q_proj(hidden_states)
+        if check_for_nan(q_proj, "q_proj"):
+            return q_proj
+        
+        k_proj = self.k_proj(hidden_states)
+        if check_for_nan(k_proj, "k_proj"):
+            return k_proj
+            
+        v_proj = self.v_proj(hidden_states)
+        if check_for_nan(v_proj, "v_proj"):
+            return v_proj
+        
+        # 检查卷积层输出
+        q, conv_state_q = self.q_conv1d(
+            x=q_proj,
+            cache=conv_state_q,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens
         )
-
-        query, key, value = torch.split(
-            mixed_qkv,
-            [
-                self.key_dim,
-                self.key_dim,
-                self.value_dim,
-            ],
-            dim=-1,
+        if check_for_nan(q, "q after conv1d"):
+            return q
+        
+        k, conv_state_k = self.k_conv1d(
+            x=k_proj,
+            cache=conv_state_k,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens
         )
-        query = query.reshape(query.shape[0], query.shape[1], -1, self.head_k_dim)
-        key = key.reshape(key.shape[0], key.shape[1], -1, self.head_k_dim)
-        value = value.reshape(value.shape[0], value.shape[1], -1, self.head_v_dim)
-
-        beta = b.sigmoid()
-        # If the model is loaded in fp16, without the .float() here, A might be -inf
-        g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
-        if self.num_v_heads // self.num_k_heads > 1:
-            query = query.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
-            key = key.repeat_interleave(self.num_v_heads // self.num_k_heads, dim=2)
-
-        core_attn_out, last_recurrent_state = chunk_gated_delta_rule(
-            query,
-            key,
-            value,
-            g=g,
-            beta=beta,
-            initial_state=None,
-            output_final_state=False,
-            use_qk_l2norm_in_kernel=True,
+        if check_for_nan(k, "k after conv1d"):
+            return k
+        
+        v, conv_state_v = self.v_conv1d(
+            x=v_proj,
+            cache=conv_state_v,
+            output_final_state=use_cache,
+            cu_seqlens=cu_seqlens
         )
+        if check_for_nan(v, "v after conv1d"):
+            return v
+        
+        # 检查门控机制
+        g_a = self.f_a_proj(hidden_states)
+        if check_for_nan(g_a, "f_a_proj"):
+            return g_a
+        
+        g = self.f_b_proj(g_a)
+        if check_for_nan(g, "f_b_proj"):
+            return g
+        
+        # 这里是最可能出现 NaN 的地方
+        g = fused_kda_gate(g, self.A_log, self.head_dim, g_bias=self.dt_bias)
+        if check_for_nan(g, "g after fused_kda_gate"):
+            return g
+        
+        beta = self.b_proj(hidden_states).float().sigmoid()
+        if check_for_nan(beta, "beta"):
+            return beta
 
-        z_shape_og = z.shape
-        # reshape input data into 2D tensor
-        core_attn_out = core_attn_out.reshape(-1, core_attn_out.shape[-1])
-        z = z.reshape(-1, z.shape[-1])
-        core_attn_out = self.norm(core_attn_out, z)
-        core_attn_out = core_attn_out.reshape(z_shape_og)
-        core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1)
+        q, k = map(lambda x: rearrange(
+            x, '... (h d) -> ... h d', d=self.head_k_dim), (q, k))
+        v = rearrange(v, '... (h d) -> ... h d', d=self.head_dim)
 
-        output = self.out_proj(core_attn_out)
-        return output
+        if mode == 'chunk':
+            o, recurrent_state = chunk_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=None,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
+            if check_for_nan(o, "output from chunk_kda"):
+                return o
+        else:
+            o, recurrent_state = fused_recurrent_kda(
+                q=q,
+                k=k,
+                v=v,
+                g=g,
+                beta=beta,
+                initial_state=recurrent_state,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=cu_seqlens,
+            )
+            if check_for_nan(o, "output from fused_recurrent_kda"):
+                return o
+                
+        if cache_params is not None:
+            cache_params.recurrent_states[self.layer_idx] = recurrent_state
+            cache_params.conv_states[self.layer_idx] = (
+                conv_state_q, conv_state_k, conv_state_v)
 
+        g = self.g_b_proj(self.g_a_proj(hidden_states))
+        if check_for_nan(g, "g after g_b_proj"):
+            return g
+        
+        g = rearrange(g, '... (h d) -> ... h d', d=self.head_dim)
+        o = self.o_norm(o, g)
+        if check_for_nan(o, "o after o_norm"):
+            return o
+
+        o = rearrange(o, 'b t h d -> b t (h d)')
+        o = self.o_proj(o)
+        if check_for_nan(o, "final output"):
+            return o
+            
+        return o
 
 class Attention(HuggingfaceAttention):
     def __init__(
@@ -178,10 +285,7 @@ class Attention(HuggingfaceAttention):
             cp_comm_type,
             model_comm_pgs,
         )
-        if Qwen3NextAttention is None:
-            raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
-
-        self.linear_attn = Qwen3NextGatedDeltaNet(self.hf_config, self.hf_layer_idx)
+        self.linear_attn = KimiDeltaAttention(self.hf_config, self.hf_layer_idx)
         self.input_layernorm = Qwen3NextRMSNorm(self.hf_config.hidden_size, eps=self.hf_config.rms_norm_eps)
 
     def hf_forward(self, hidden_states, position_ids, packed_seq_params):
