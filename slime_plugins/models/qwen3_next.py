@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
+from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
@@ -170,6 +171,7 @@ class Attention(HuggingfaceAttention):
         layer_number: int,
         cp_comm_type: str = "p2p",
         model_comm_pgs=None,
+        attn_mask_type=None,  # MTP requires this parameter to be present
     ):
         super().__init__(
             args,
@@ -220,7 +222,10 @@ def get_qwen3_next_spec(args, config, vp_stage):
             layer_specs = copy.deepcopy(transformer_layer_spec.layer_specs[layer_id])
             layer_specs.submodules.self_attention = ModuleSpec(
                 module=Attention,
-                params={"args": args},
+                params={
+                    "args": args,
+                    "attn_mask_type": AttnMaskType.causal,  # MTP requires attn_mask_type to be set
+                },
             )
             transformer_layer_spec.layer_specs[layer_id] = layer_specs
         transformer_layer_spec.layer_specs[layer_id].submodules.mlp.submodules.shared_experts.params = {"gate": True}

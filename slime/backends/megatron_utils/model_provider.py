@@ -75,11 +75,16 @@ def get_model_provider_func(
         if args.record_memory_history:
             profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 
+        # Load spec first to allow monkey patching (e.g., for gpt-oss MoE + bias support)
+        transformer_layer_spec = None
+        if args.spec is not None:
+            transformer_layer_spec = import_module(args.spec)
+        
         # Experimental loading arguments from yaml
+        # Note: This must be called AFTER loading spec to allow monkey patches to take effect
         config: TransformerConfig = core_transformer_config_from_args(args)
 
         if args.spec is not None:
-            transformer_layer_spec = import_module(args.spec)
             # Allow the spec to be a function so that user can use customized Megatron easier.
             if callable(transformer_layer_spec):
                 transformer_layer_spec = transformer_layer_spec(args, config, vp_stage)

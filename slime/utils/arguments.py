@@ -1041,6 +1041,31 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
             )
+            # InfLLM V2 sparse attention parameters
+            parser.add_argument(
+                "--infllmv2-topk-blocks",
+                type=int,
+                default=64,
+                help="Number of top-k blocks to select in InfLLM V2 Stage 1",
+            )
+            parser.add_argument(
+                "--infllmv2-block-size",
+                type=int,
+                default=64,
+                help="Block size for InfLLM V2 sparse attention",
+            )
+            parser.add_argument(
+                "--infllmv2-use-stage1",
+                type=lambda x: x.lower() in ('true', '1', 'yes') if isinstance(x, str) else bool(x),
+                default=True,
+                help="Enable Stage 1 for top-k selection in InfLLM V2",
+            )
+            parser.add_argument(
+                "--infllmv2-use-for-linear-attention",
+                type=lambda x: x.lower() in ('true', '1', 'yes') if isinstance(x, str) else bool(x),
+                default=False,
+                help="Whether to use InfLLM V2 for linear attention layers (not recommended)",
+            )
             return parser
 
         def add_mtp_training_arguments(parser):

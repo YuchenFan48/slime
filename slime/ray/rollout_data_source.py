@@ -32,6 +32,8 @@ class RolloutDataSource:
         else:
             self.data_files = [args.prompt_data]  # If it's not a directory, treat it as a single file
 
+        self.data_files = [f for f in self.data_files if 'dclm' in f]
+        print("Number of DCLM files: ", len(self.data_files))
         self.data_files = sorted([os.path.abspath(f) for f in self.data_files])
         self.dataset = None
         self.current_file_index = 0
@@ -66,9 +68,10 @@ class RolloutDataSource:
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
             self.current_file_index += 1
+            print(f"self.dataset size: {len(self.dataset.samples)}")
         else:
             self.dataset = None
-        print(f"self.dataset size: {len(self.dataset.samples)}")
+            print("No more data files to load, dataset is None")
 
     def get_samples(self, num_samples):
         # TODO further improve code
@@ -177,7 +180,7 @@ class RolloutDataSource:
             self.current_file_index = 0
             self.load_next_file(self.tokenizer)
     
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle:
+        if self.args.rollout_global_dataset and self.args.rollout_shuffle and self.dataset is not None:
             self.dataset.shuffle(self.epoch_id)
 
 

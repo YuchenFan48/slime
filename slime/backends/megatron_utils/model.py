@@ -55,11 +55,20 @@ def log_with_file(message, log_file=None, args=None):
             log_file = _default_log_file
     
     # Ensure log directory exists
-    os.makedirs(os.path.dirname(os.path.abspath(log_file)) if os.path.dirname(log_file) else ".", exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(log_file)) if os.path.dirname(log_file) else ".", exist_ok=True)
+    except OSError:
+        # If directory creation fails (e.g., disk quota exceeded), skip file logging
+        return
     
     # Append to log file
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(log_message + "\n")
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(log_message + "\n")
+    except OSError as e:
+        # If file write fails (e.g., disk quota exceeded), print warning but don't crash
+        print(f"Warning: Failed to write to log file {log_file}: {e}")
+        print("Continuing training without file logging...")
 
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
     """Create and configure the optimizer learning-rate/weight-decay scheduler.
