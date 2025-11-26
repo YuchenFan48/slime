@@ -54,6 +54,7 @@ class Dataset:
         multimodal_keys=None,
         label_key=None,
         tool_key=None,
+        shuffle=True,
         metadata_key="metadata",
         seed=42,
         apply_chat_template=False,
@@ -111,6 +112,11 @@ class Dataset:
 
         self.epoch_id = -1
         self.seed = seed
+        # 如果需要shuffle，则对数据进行shuffle
+        if shuffle:
+            # 使用seed初始化随机数生成器，确保可重现
+            rng = random.Random(self.seed)
+            rng.shuffle(self.origin_samples)
         self.samples = self.origin_samples
 
     def shuffle(self, new_epoch_id):

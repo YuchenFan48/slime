@@ -137,7 +137,6 @@ def setup_model_and_optimizer(
     assert args.load is not None or args.pretrained_checkpoint is not None
 
     model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder, wrap_with_ddp=False)
-
     config = get_model_config(model[0])
 
     kwargs = {}
@@ -497,7 +496,6 @@ def train_one_step(
                 loss_mask=loss_mask,
                 mtp_kwargs=mtp_kwargs,
             )
-
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
