@@ -15,6 +15,37 @@ from typing_extensions import override
 
 from slime.backends.megatron_utils.update_weight_utils import convert_to_hf, remove_padding
 
+from transformers import PretrainedConfig, AutoConfig, Qwen2Config
+
+# 1. 定义 Qwen3KimiConfig
+# 既然是 Qwen3 改版，通常继承自 Qwen2Config 是最方便的，
+# 然后把你在 KimiDeltaAttention 中用到的新参数加进去。
+class Qwen3KimiConfig(Qwen2Config):
+    model_type = "qwen3_kimi"
+
+    def __init__(
+        self,
+        linear_conv_kernel_dim=4,
+        linear_num_value_heads=None,
+        linear_num_key_heads=None,
+        linear_key_head_dim=None,
+        linear_value_head_dim=None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.linear_conv_kernel_dim = linear_conv_kernel_dim
+        self.linear_num_value_heads = linear_num_value_heads
+        self.linear_num_key_heads = linear_num_key_heads
+        self.linear_key_head_dim = linear_key_head_dim
+        self.linear_value_head_dim = linear_value_head_dim
+
+# 2. 注册这个 Config
+# 这一步告诉 transformers：当遇到 "model_type": "qwen3_kimi" 时，使用 Qwen3KimiConfig 类
+try:
+    AutoConfig.register("qwen3_kimi", Qwen3KimiConfig)
+except ValueError:
+    # 防止重复注册报错
+    pass
 
 class UnpicklerWrapper(pickle.Unpickler):
     @override

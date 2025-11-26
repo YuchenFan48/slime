@@ -4,6 +4,7 @@ FIRST_K_DENSE_REPLACE=0
 arr=()
 for ((i=0; i<NLAYERS; i++)); do
   if (( i < FIRST_K_DENSE_REPLACE )); then
+  
     arr+=(0)
   else
     arr+=(1)
@@ -14,13 +15,11 @@ printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
 
 
 MODEL_ARGS=(
-   --spec "slime_plugins.models.qwen3_next" "get_qwen3_next_spec"
+   --spec "slime_plugins.models.qwen3_kimi" "get_qwen3_next_spec"
 
    --disable-bias-linear
    --qk-layernorm
-   --group-query-attention
    --num-attention-heads 16
-   --num-query-groups 2
    --kv-channels 128
    --num-layers 28
    --hidden-size 1024

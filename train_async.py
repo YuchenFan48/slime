@@ -8,6 +8,45 @@ import wandb
 from datetime import datetime
 import os
 
+# === 修复开始：注册自定义 Config 和 Tokenizer ===
+import sys
+from transformers import AutoConfig, AutoTokenizer, Qwen2Config
+
+# 尝试导入 Qwen2 的 Tokenizer，如果版本太旧可能需要 fallback
+
+from transformers import Qwen2Tokenizer, Qwen2TokenizerFast
+
+
+class Qwen3KimiConfig(Qwen2Config):
+    model_type = "qwen3_kimi"
+
+    def __init__(
+        self,
+        linear_conv_kernel_dim=4,
+        linear_num_value_heads=None,
+        linear_num_key_heads=None,
+        linear_key_head_dim=None,
+        linear_value_head_dim=None,
+        attention_bias=True,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.linear_conv_kernel_dim = linear_conv_kernel_dim
+        self.linear_num_value_heads = linear_num_value_heads
+        self.linear_num_key_heads = linear_num_key_heads
+        self.linear_key_head_dim = linear_key_head_dim
+        self.linear_value_head_dim = linear_value_head_dim
+        self.attention_bias = attention_bias
+
+# 1. 注册 Config
+
+AutoConfig.register("qwen3_kimi", Qwen3KimiConfig)
+print("[Slime] Successfully registered 'qwen3_kimi' config.")
+
+
+AutoTokenizer.register(Qwen3KimiConfig, slow_tokenizer_class=Qwen2Tokenizer, fast_tokenizer_class=Qwen2TokenizerFast)
+print("[Slime] Successfully registered 'qwen3_kimi' tokenizer mapping.")
+# === 修复结束 ===
 # Global variable for default log file path
 _default_log_file = None
 def log_with_file(message, log_file=None, args=None):
@@ -64,6 +103,8 @@ def train(args):
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
+        with open('log.log', 'a') as f:
+            f.write(f"Step: {rollout_id}")
         # Sync the last generation
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)

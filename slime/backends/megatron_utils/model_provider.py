@@ -57,21 +57,9 @@ def get_model_provider_func(
     def model_provider(
         pre_process: bool = True, post_process: bool = True, vp_stage: Optional[int] = None
     ) -> GPTModel:
-        """Builds the model.
-
-        If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
-
-        Args:
-            pre_process (bool, optional): Set to true if you need to compute embedings. Defaults to True.
-            post_process (bool, optional): Set to true if you need to want to compute output logits/loss. Defaults to True.
-
-
-        Returns:
-            Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
-        """
+        """Builds the model."""
         use_te = args.transformer_impl == "transformer_engine"
 
-        # TODO maybe move this to other parts
         if args.record_memory_history:
             profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 

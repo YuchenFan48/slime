@@ -14,7 +14,11 @@ from transformers.activations import ACT2FN
 try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
-    from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextAttention, Qwen3NextRMSNorm
+    from transformers.models.qwen3_next.modeling_qwen3_next import (
+        Qwen3NextAttention,
+        Qwen3NextRMSNorm,
+        Qwen3NextRotaryEmbedding,
+    )
 except ImportError:
     pass
 
@@ -183,15 +187,32 @@ class Attention(HuggingfaceAttention):
         if Qwen3NextAttention is None:
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
 
-        self.linear_attn = Qwen3NextGatedDeltaNet(self.hf_config, self.hf_layer_idx)
+        self.layer_type = self.hf_config.layer_types[self.hf_layer_idx]
+        if self.layer_type == "linear_attention":
+            self.linear_attn = Qwen3NextGatedDeltaNet(self.hf_config, self.hf_layer_idx)
+        elif self.layer_type == "full_attention":
+            self.rotary_emb = Qwen3NextRotaryEmbedding(config=self.hf_config)
+            self.self_attn = Qwen3NextAttention(self.hf_config, self.hf_layer_idx)
+
         self.input_layernorm = Qwen3NextRMSNorm(self.hf_config.hidden_size, eps=self.hf_config.rms_norm_eps)
 
     def hf_forward(self, hidden_states, position_ids, packed_seq_params):
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.linear_attn(
-            hidden_states=hidden_states,
-            cu_seqlens=packed_seq_params.cu_seqlens_q,
-        )
+
+        if self.layer_type == "linear_attention":
+            hidden_states = self.linear_attn(
+                hidden_states=hidden_states,
+                cu_seqlens=packed_seq_params.cu_seqlens_q,
+            )
+        elif self.layer_type == "full_attention":
+            # Self Attention
+            position_embeddings = self.rotary_emb(hidden_states, position_ids)
+            hidden_states, _ = self.self_attn(
+                hidden_states=hidden_states,
+                attention_mask=None,
+                position_ids=position_ids,
+                position_embeddings=position_embeddings,
+            )
         return hidden_states
 
 
@@ -228,5 +249,14 @@ def get_qwen3_next_spec(args, config, vp_stage):
                 },
             )
             transformer_layer_spec.layer_specs[layer_id] = layer_specs
+        else:
+            transformer_layer_spec.layer_specs[layer_id].submodules.self_attention = ModuleSpec(
+                module=Attention,
+                params={
+                    "args": args,
+                    "attn_mask_type": AttnMaskType.causal,  # MTP requires attn_mask_type to be set
+                },
+            )
         transformer_layer_spec.layer_specs[layer_id].submodules.mlp.submodules.shared_experts.params = {"gate": True}
+
     return transformer_layer_spec

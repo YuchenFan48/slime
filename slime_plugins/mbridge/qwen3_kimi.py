@@ -1,39 +1,55 @@
+import re
 import torch
 from mbridge.core import register_model
 from mbridge.models import Qwen2MoEBridge
-import re
 
-@register_model("qwen3_next")
-class Qwen3NextBridge(Qwen2MoEBridge):
+
+@register_model("qwen3_kimi")
+class Qwen3KimiBridge(Qwen2MoEBridge):
     _ATTENTION_MAPPING = (
         Qwen2MoEBridge._ATTENTION_MAPPING
         | {
             f"self_attention.{weight_name}": ["model.layers.{layer_number}." + weight_name]
             for weight_name in [
                 "input_layernorm.weight",
-                # linear attn
+                # === Kimi Linear Attention Components ===
+                # Parameters
                 "linear_attn.A_log",
-                "linear_attn.conv1d.weight",
                 "linear_attn.dt_bias",
-                "linear_attn.in_proj_ba.weight",
-                "linear_attn.in_proj_qkvz.weight",
-                "linear_attn.norm.weight",
-                "linear_attn.out_proj.weight",
-                # gated attn
+                # Norms
+                "linear_attn.o_norm.weight",
+                # Convolutions (Separated)
+                "linear_attn.q_conv1d.weight",
+                "linear_attn.k_conv1d.weight",
+                "linear_attn.v_conv1d.weight",
+                # Projections (Separated)
+                "linear_attn.q_proj.weight",
+                "linear_attn.k_proj.weight",
+                "linear_attn.v_proj.weight",
+                "linear_attn.f_a_proj.weight",
+                "linear_attn.f_b_proj.weight",
+                "linear_attn.g_a_proj.weight",
+                "linear_attn.g_b_proj.weight",
+                "linear_attn.b_proj.weight",
+                "linear_attn.o_proj.weight",
+                # === Standard / Gated Attention Components (Full Attn Layers) ===
                 "self_attn.k_norm.weight",
-                "self_attn.k_proj.weight",
-                "self_attn.o_proj.weight",
                 "self_attn.q_norm.weight",
-                "self_attn.q_proj.weight",
-                "self_attn.v_proj.weight",
+                "self_attn.o_proj.weight",
             ]
         }
         | {
+            # Standard Qwen Full Attention Layer Mappings (Merged QKV)
             "self_attention.linear_qgkv.layer_norm_weight": ["model.layers.{layer_number}.input_layernorm.weight"],
             "self_attention.linear_qgkv.weight": [
                 "model.layers.{layer_number}.self_attn.q_proj.weight",
                 "model.layers.{layer_number}.self_attn.k_proj.weight",
                 "model.layers.{layer_number}.self_attn.v_proj.weight",
+            ],
+            "self_attention.linear_qgkv.bias": [
+                "model.layers.{layer_number}.self_attn.q_proj.bias",
+                "model.layers.{layer_number}.self_attn.k_proj.bias",
+                "model.layers.{layer_number}.self_attn.v_proj.bias",
             ],
         }
     )
@@ -106,12 +122,14 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             return self._weight_name_mapping_mlp(mcore_weights_name)
         
         raise NotImplementedError(f"Unsupported parameter name: {mcore_weights_name}")
-
+        
     def _weight_to_mcore_format(
         self, mcore_weights_name: str, hf_weights: list[torch.Tensor]
     ) -> tuple[list[str], list[torch.Tensor]]:
+        # This logic handles the Full Attention layers (which usually use linear_qgkv naming in Megatron)
+        # Kimi's Linear Attention layers use specific names (linear_attn.*) and won't trigger this.
         if "self_attention.linear_qgkv." in mcore_weights_name and "layer_norm" not in mcore_weights_name:
-            # merge qkv
+            # merge qkv for Full Attention Layers
             assert len(hf_weights) == 3
             num_key_value_heads = self.hf_config.num_key_value_heads
             hidden_dim = self.hf_config.hidden_size
@@ -120,7 +138,14 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             head_dim = getattr(self.hf_config, "head_dim", hidden_dim // num_attention_heads)
             group_dim = head_dim * num_attention_heads // num_key_value_heads
             q, k, v = hf_weights
-            # q k v might be tp split
+            
+            # Check if bias
+            if ".bias" in mcore_weights_name:
+                 # Simple concat for bias
+                 qgkv = torch.cat([q, k, v], dim=0).contiguous()
+                 return qgkv
+
+            # q k v might be tp split (Weight)
             real_num_key_value_heads = q.shape[0] // (2 * group_dim)
             q = (
                 q.view(
@@ -137,32 +162,52 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             )
             k = k.view([real_num_key_value_heads, head_dim, -1])
             v = v.view([real_num_key_value_heads, head_dim, -1])
-            out_shape = [-1, hidden_dim] if ".bias" not in mcore_weights_name else [-1]
+            out_shape = [-1, hidden_dim]
 
             qgkv = torch.cat([q, k, v], dim=1).view(*out_shape).contiguous()
             return qgkv
 
         return super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
 
+    def _weight_name_mapping_attention(self, name: str) -> list[str]:
+        match = re.match(r"decoder\.layers\.(\d+)\.(self_attention\..+)", name)
+        if match:
+            layer_idx, rest = match.groups()
+            hf_prefix = f"model.layers.{layer_idx}."
+            if rest.startswith("self_attention.linear_attn."):
+                sub_name = rest[len("self_attention.linear_attn.") :]
+                return [hf_prefix + "linear_attn." + sub_name]
+            if rest.startswith("self_attention.self_attn."):
+                sub_name = rest[len("self_attention.self_attn.") :]
+                return [hf_prefix + "self_attn." + sub_name]
+        return super()._weight_name_mapping_attention(name)
+
     def _build_config(self):
-        return self._build_base_config(
-            use_cpu_initialization=False,
-            # MoE specific
-            moe_ffn_hidden_size=self.hf_config.moe_intermediate_size,
-            moe_router_bias_update_rate=0.001,
-            moe_router_topk=self.hf_config.num_experts_per_tok,
-            num_moe_experts=self.hf_config.num_experts,
-            moe_aux_loss_coeff=self.hf_config.router_aux_loss_coef,
-            moe_router_load_balancing_type="none", 
-            moe_grouped_gemm=True,
-            moe_router_score_function="softmax",
-            # Other optimizations
-            persist_layer_norm=True,
-            bias_activation_fusion=True,
-            bias_dropout_fusion=True,
-            # Qwen specific
-            moe_router_pre_softmax=False,
-            qk_layernorm=True,
-            # Qwen3 Next specific
-            use_gated_attention=True,
-        )
+            # 1. 先构建基础配置 (包含 hidden_size, num_layers 等通用参数)
+            config = self._build_base_config(
+                use_cpu_initialization=False,
+                moe_ffn_hidden_size=self.hf_config.moe_intermediate_size,
+                moe_router_bias_update_rate=0.001,
+                moe_router_topk=self.hf_config.num_experts_per_tok,
+                num_moe_experts=self.hf_config.num_experts,
+                moe_aux_loss_coeff=self.hf_config.router_aux_loss_coef,
+                moe_router_load_balancing_type="none",
+                moe_grouped_gemm=True,
+                moe_router_score_function="softmax",
+                persist_layer_norm=True,
+                bias_activation_fusion=True,
+                bias_dropout_fusion=True,
+                moe_router_pre_softmax=False,
+                qk_layernorm=True,
+                use_gated_attention=False, # Kimi 使用 KDA，不使用 Next 的 Gated Delta
+            )
+
+            # 2. 【关键修复】显式注入 Kimi 特有的参数
+            # 如果不加这几行，Mcore 模型就会用错误的默认值初始化，导致 expected=8192
+            config.linear_num_value_heads = getattr(self.hf_config, "linear_num_value_heads", 16)
+            config.linear_num_key_heads = getattr(self.hf_config, "linear_num_key_heads", 16)
+            config.linear_value_head_dim = getattr(self.hf_config, "linear_value_head_dim", 128)
+            config.linear_key_head_dim = getattr(self.hf_config, "linear_key_head_dim", 128)
+            config.linear_conv_kernel_dim = getattr(self.hf_config, "linear_conv_kernel_dim", 4)
+
+            return config

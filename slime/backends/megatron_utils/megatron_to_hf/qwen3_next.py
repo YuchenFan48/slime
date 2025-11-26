@@ -19,11 +19,139 @@ def convert_qwen3_next_to_hf(args, name, param):
         head_dim = args.hidden_size // args.num_attention_heads
     value_num_per_group = args.num_attention_heads // args.num_query_groups
 
+    # Handle MTP (Multi-Task Prediction) layers
+    mtp_layers_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
+    match = re.match(mtp_layers_pattern, name)
+    if match:
+        print(match)
+        layer_idx, rest = match.groups()
+        # Handle transformer layer within MTP
+        transformer_layer_pattern = r"transformer_layer\.(.+)"
+        match = re.match(transformer_layer_pattern, rest)
+        if match:
+            rest = match.groups()[0]
+            
+            # Handle experts in MTP
+            expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
+            match = re.match(expert_pattern, rest)
+            if match:
+                rest, expert_idx = match.groups()
+                if rest == "linear_fc1":
+                    gate_weight, up_weight = param.chunk(2, dim=0)
+                    outputs = [
+                        (f"mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{expert_idx}.gate_proj.weight", gate_weight),
+                        (f"mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{expert_idx}.up_proj.weight", up_weight),
+                    ]
+                    return outputs
+                elif rest == "linear_fc2":
+                    outputs = [
+                        (f"mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{expert_idx}.down_proj.weight", param),
+                    ]
+                    return outputs
+                else:
+                    raise ValueError(f"Unknown MTP expert parameter name: {name}")
+            
+            # Handle shared expert in MTP
+            shared_expert_pattern = r"mlp.shared_experts\.(.+)"
+            match = re.match(shared_expert_pattern, rest)
+            if match:
+                rest = match.groups()[0]
+                if rest == "linear_fc1.weight":
+                    gate_weight, up_weight = param.chunk(2, dim=0)
+                    return [
+                        (f"mtp.layers.{layer_idx}.transformer_layer.mlp.shared_expert.gate_proj.weight", gate_weight),
+                        (f"mtp.layers.{layer_idx}.transformer_layer.mlp.shared_expert.up_proj.weight", up_weight),
+                    ]
+                elif rest == "linear_fc2.weight":
+                    return [(f"mtp.layers.{layer_idx}.transformer_layer.mlp.shared_expert.down_proj.weight", param)]
+                elif rest == "gate_weight":
+                    return [(f"mtp.layers.{layer_idx}.transformer_layer.mlp.shared_expert_gate.weight", param)]
+                else:
+                    raise ValueError(f"Unknown MTP shared expert parameter name: {name}")
+            
+            # Handle attention in MTP
+            if rest == "self_attention.linear_proj.weight":
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.self_attn.o_proj.weight", param)]
+            elif rest == "self_attention.linear_qgkv.weight":
+                param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
+                q_param, k_param, v_param = torch.split(
+                    param, split_size_or_sections=[2 * value_num_per_group, 1, 1], dim=1
+                )
+                q_param = (
+                    q_param.reshape(args.num_query_groups, 2, value_num_per_group, head_dim, args.hidden_size)
+                    .transpose(1, 2)
+                    .reshape(-1, args.hidden_size)
+                )
+                k_param = k_param.reshape(-1, args.hidden_size)
+                v_param = v_param.reshape(-1, args.hidden_size)
+                return [
+                    (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.q_proj.weight", q_param),
+                    (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.k_proj.weight", k_param),
+                    (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.v_proj.weight", v_param),
+                ]
+            elif rest == "self_attention.linear_qgkv.bias":
+                param = param.view(args.num_query_groups, -1)
+                q_bias, k_bias, v_bias = torch.split(
+                    param,
+                    split_size_or_sections=[value_num_per_group * head_dim, head_dim, head_dim],
+                    dim=1,
+                )
+                q_bias = q_bias.contiguous().flatten()
+                k_bias = k_bias.contiguous().flatten()
+                v_bias = v_bias.contiguous().flatten()
+                return [
+                    (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.q_proj.bias", q_bias),
+                    (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.k_proj.bias", k_bias),
+                    (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.v_proj.bias", v_bias),
+                ]
+            elif rest == "mlp.linear_fc1.weight":
+                gate_weight, up_weight = param.chunk(2, dim=0)
+                return [
+                    (f"mtp.layers.{layer_idx}.transformer_layer.mlp.gate_proj.weight", gate_weight),
+                    (f"mtp.layers.{layer_idx}.transformer_layer.mlp.up_proj.weight", up_weight),
+                ]
+            elif rest == "mlp.linear_fc2.weight":
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.mlp.down_proj.weight", param)]
+            elif rest == "mlp.router.weight":
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.mlp.gate.weight", param)]
+            elif rest == "self_attention.q_layernorm.weight":
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.self_attn.q_norm.weight", param)]
+            elif rest == "self_attention.k_layernorm.weight":
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.self_attn.k_norm.weight", param)]
+            elif rest.startswith("self_attention.") and rest[len("self_attention.") :] in [
+                "input_layernorm.weight",
+                # linear attn
+                "linear_attn.A_log",
+                "linear_attn.conv1d.weight",
+                "linear_attn.dt_bias",
+                "linear_attn.in_proj_ba.weight",
+                "linear_attn.in_proj_qkvz.weight",
+                "linear_attn.norm.weight",
+                "linear_attn.out_proj.weight",
+                'linear_qkv.weight',
+                'linear_qkv.layer_norm_weight'
+            ]:
+                rest = rest[len("self_attention.") :]
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.{rest}", param)]
+            elif rest == "pre_mlp_layernorm.weight":
+                return [(f"mtp.layers.{layer_idx}.transformer_layer.post_attention_layernorm.weight", param)]
+        
+        # Handle other MTP components
+        elif rest == "eh_proj.weight":
+            return [(f"mtp.layers.{layer_idx}.eh_proj.weight", param)]
+        elif rest == "enorm.weight":
+            return [(f"mtp.layers.{layer_idx}.enorm.weight", param)]
+        elif rest == "hnorm.weight":
+            return [(f"mtp.layers.{layer_idx}.hnorm.weight", param)]
+        elif rest == "final_layernorm.weight":
+            return [(f"mtp.layers.{layer_idx}.final_layernorm.weight", param)]
+        else:
+            raise ValueError(f"Unknown MTP parameter name: {name}")
+
     decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
     match = re.match(decoder_layers_pattern, name)
     if match:
         layer_idx, rest = match.groups()
-
         # experts
         expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
         match = re.match(expert_pattern, rest)
@@ -149,8 +277,9 @@ def convert_qwen3_next_to_hf(args, name, param):
             "self_attn.q_norm.weight",
             "self_attn.q_proj.weight",
             "self_attn.v_proj.weight",
+            'linear_qkv.layer_norm_weight',
+            'linear_qkv.weight'
         ]:
             rest = rest[len("self_attention.") :]
             return [(f"model.layers.{layer_idx}.{rest}", param)]
-
     raise ValueError(f"Unknown parameter name: {name}")
