@@ -3,7 +3,7 @@
 set -ex
 
 SCRIPT=/mnt/shared-storage-user/p1-shared/yuchenzhang/slime/scripts/run-qwen3-next-inf-reduced.sh
-NODE_COUNT=1
+NODE_COUNT=2
 export KUBEBRAIN_CLUSTER_ENTRY="https://h.pjlab.org.cn"
 export KUBEBRAIN_NAMESPACE="ailab-p1"
 export BRAINPP_ACCESS_KEY_ID="46d5d1380639cb4bcf736a00df6cb9c8"

@@ -10,6 +10,7 @@ from transformers import AutoTokenizer
 from slime.utils.data import Dataset
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
+from slime.utils.train_metric_utils import log_with_file
 
 
 # TODO may further refactor data-loading part later
@@ -32,8 +33,6 @@ class RolloutDataSource:
         else:
             self.data_files = [args.prompt_data]  # If it's not a directory, treat it as a single file
 
-        self.data_files = [f for f in self.data_files if 'dclm' in f]
-        print("Number of DCLM files: ", len(self.data_files))
         self.data_files = sorted([os.path.abspath(f) for f in self.data_files])
         self.dataset = None
         self.current_file_index = 0
@@ -53,7 +52,7 @@ class RolloutDataSource:
         """Load the next file and initialize the dataset"""
         if self.current_file_index < len(self.data_files):
             file_path = self.data_files[self.current_file_index]
-            print(f"file path:{file_path}")
+            log_with_file(f"Loading data file [{self.current_file_index + 1}/{len(self.data_files)}]: {file_path}", args=self.args)
             self.dataset = Dataset(
                 file_path,
                 tokenizer=self.tokenizer,
@@ -68,10 +67,10 @@ class RolloutDataSource:
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
             self.current_file_index += 1
-            print(f"self.dataset size: {len(self.dataset.samples)}")
+            log_with_file(f"Data file loaded successfully. Dataset size: {len(self.dataset.samples)} samples", args=self.args)
         else:
             self.dataset = None
-            print("No more data files to load, dataset is None")
+            log_with_file("All data files have been processed. Dataset set to None.", args=self.args)
 
     def get_samples(self, num_samples):
         # TODO further improve code
@@ -180,7 +179,7 @@ class RolloutDataSource:
             self.current_file_index = 0
             self.load_next_file(self.tokenizer)
     
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle and self.dataset is not None:
+        if self.args.rollout_global_dataset and self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)
 
 

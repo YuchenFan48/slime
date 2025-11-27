@@ -132,7 +132,7 @@ CKPT_ARGS=(
    # Training from scratch - use save path as load path (will initialize randomly)
    --load /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-infllmv2-16heads-mqa-hdim128-1120-reduced/
    --save /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-infllmv2-16heads-mqa-hdim128-1120-reduced/
-   --save-interval 4096
+   --save-interval 2048
    --no-load-optim 
    # Model will initialize randomly if checkpoint doesn't exist
 )
