@@ -130,7 +130,7 @@ class RolloutManager:
         start_time = time.time()
         try:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-            self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
+            # self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
@@ -177,9 +177,8 @@ class RolloutManager:
             metrics = data.metrics
             data = data.samples
             # flatten the data if it is a list of lists
-            while isinstance(data[0], list):
-                data = sum(data, [])
-
+            data = [item for sublist in data for item in sublist]
+            print(len(data))
             if len(data) % self.args.global_batch_size != 0:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
@@ -528,7 +527,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
-    log_with_file(f"perf {rollout_id}: {log_dict}", args=args)
+    # log_with_file(f"perf {rollout_id}: {log_dict}", args=args)
     step = (
         rollout_id
         if not args.wandb_always_use_train_step

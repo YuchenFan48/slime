@@ -1,5 +1,3 @@
-import copy
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,8 +5,6 @@ from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
-from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
-from transformers import AutoConfig
 from transformers.activations import ACT2FN
 
 try:
@@ -234,29 +230,12 @@ def get_qwen3_next_spec(args, config, vp_stage):
     # Slice the layer specs to only include the layers that are built in this pipeline stage.
     # Note: MCore layer_number starts at 1
     num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
-    offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
-
-    hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
     for layer_id in range(num_layers_to_build):
-        if hf_config.layer_types[layer_id + offset] == "linear_attention":
-            layer_specs = copy.deepcopy(transformer_layer_spec.layer_specs[layer_id])
-            layer_specs.submodules.self_attention = ModuleSpec(
-                module=Attention,
-                params={
-                    "args": args,
-                    "attn_mask_type": AttnMaskType.causal,  # MTP requires attn_mask_type to be set
-                },
-            )
-            transformer_layer_spec.layer_specs[layer_id] = layer_specs
-        else:
-            transformer_layer_spec.layer_specs[layer_id].submodules.self_attention = ModuleSpec(
-                module=Attention,
-                params={
-                    "args": args,
-                    "attn_mask_type": AttnMaskType.causal,  # MTP requires attn_mask_type to be set
-                },
-            )
+        transformer_layer_spec.layer_specs[layer_id].submodules.self_attention = ModuleSpec(
+            module=Attention,
+            params={"args": args},
+        )
         transformer_layer_spec.layer_specs[layer_id].submodules.mlp.submodules.shared_experts.params = {"gate": True}
 
     return transformer_layer_spec

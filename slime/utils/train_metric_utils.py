@@ -75,8 +75,6 @@ def log_perf_data_raw(
             log_dict["perf/step_time"] = total_time
             log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
-    log_with_file(f"perf {rollout_id}: {log_dict}", args=args)
-
     step = (
         rollout_id
         if not args.wandb_always_use_train_step

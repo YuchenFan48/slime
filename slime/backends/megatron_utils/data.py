@@ -152,7 +152,7 @@ def gather_log_data(
         reduced_log_dict = {
             f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
         }
-        log_with_file(f"{metric_name} {rollout_id}: {reduced_log_dict}", args=args)
+        # log_with_file(f"{metric_name} {rollout_id}: {reduced_log_dict}", args=args)
         # Calculate step once to avoid duplication
         step = (
             rollout_id
