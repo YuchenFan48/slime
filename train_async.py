@@ -103,8 +103,8 @@ def train(args):
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
-        with open('log.log', 'a') as f:
-            f.write(f"Step: {rollout_id}")
+        # with open('log.log', 'a') as f:
+        #     f.write(f"Step: {rollout_id}")
         # Sync the last generation
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
@@ -181,8 +181,8 @@ def train(args):
                 global_avg_ppl = sum(all_ppls) / len(all_ppls)
                 final_log_dict['eval/all'] = global_avg_ppl
 
-            print(final_log_dict)
-            log_with_file(f"eval {rollout_id}: {final_log_dict}", args=args)
+            # print(final_log_dict)
+            # log_with_file(f"eval {rollout_id}: {final_log_dict}", args=args)
             # 4. 将聚合后的结果记录到 Wandb
             if final_log_dict:
                 wandb.log(final_log_dict)

@@ -1,4 +1,4 @@
-NLAYERS=48
+NLAYERS=1
 FIRST_K_DENSE_REPLACE=0
 
 arr=()
@@ -20,7 +20,7 @@ MODEL_ARGS=(
    --num-attention-heads 32
    --num-query-groups 4
    --kv-channels 128
-   --num-layers 48
+   --num-layers 1
    --hidden-size 2048
    --ffn-hidden-size 6144
 
@@ -40,7 +40,7 @@ MODEL_ARGS=(
    --moe-token-dispatcher-type alltoall
    --moe-router-topk 8
    --moe-layer-freq $MOE_LAYER_FREQ
-   --num-experts 128
+   --num-experts 1024
    --moe-grouped-gemm
    --moe-token-drop-policy probs
    --moe-router-dtype fp32
