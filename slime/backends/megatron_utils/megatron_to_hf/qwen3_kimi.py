@@ -52,9 +52,9 @@ def _convert_layer_internal(args, layer_prefix, rest, param):
     # === [Attention] Kimi 特有的 Linear Attention ===
     # 匹配 self_attention.linear_attn.xxx
     if rest.startswith("self_attention.linear_attn."):
-        sub_name = rest[len("self_attention.linear_attn.") :]
+        sub_name = rest[len("self_attention.") :]
         # 直接映射: q_proj, k_proj, v_proj, o_proj, q/k/v_conv1d, f_a/b_proj, A_log, dt_bias 等
-        return [(f"{layer_prefix}.self_attn.{sub_name}", param)]
+        return [(f"{layer_prefix}.{sub_name}", param)]
 
     # === [Attention] 标准 Self Attention (Full Attention) ===
     # 处理 QKV 权重切分 (Megatron 格式 -> HF 格式)

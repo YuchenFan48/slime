@@ -34,10 +34,10 @@ from transformers.models.qwen3_next.modeling_qwen3_next import (
 from .hf_attention import HuggingfaceAttention
 
     
-from transformers import AutoConfig, Qwen2Config
+from transformers import AutoConfig, Qwen2Config, Qwen3NextConfig
 
 # === 新增代码开始 ===
-class Qwen3KimiConfig(Qwen2Config):
+class Qwen3KimiConfig(Qwen3NextConfig):
     model_type = "qwen3_kimi"
 
     def __init__(
@@ -151,9 +151,6 @@ class KimiDeltaAttention(nn.Module):
         cache_params=None,
         **kwargs
     ):
-        # 检查输入
-        if check_for_nan(hidden_states, "input hidden_states"):
-            return hidden_states  # 返回原值以便调试
         
         use_cache = cache_params is not None
         batch_size, q_len, _ = hidden_states.shape
@@ -174,16 +171,10 @@ class KimiDeltaAttention(nn.Module):
         
         # 检查投影层输出
         q_proj = self.q_proj(hidden_states)
-        if check_for_nan(q_proj, "q_proj"):
-            return q_proj
-        
+
         k_proj = self.k_proj(hidden_states)
-        if check_for_nan(k_proj, "k_proj"):
-            return k_proj
             
         v_proj = self.v_proj(hidden_states)
-        if check_for_nan(v_proj, "v_proj"):
-            return v_proj
         
         # 检查卷积层输出
         q, conv_state_q = self.q_conv1d(
@@ -192,8 +183,6 @@ class KimiDeltaAttention(nn.Module):
             output_final_state=use_cache,
             cu_seqlens=cu_seqlens
         )
-        if check_for_nan(q, "q after conv1d"):
-            return q
         
         k, conv_state_k = self.k_conv1d(
             x=k_proj,
@@ -201,8 +190,6 @@ class KimiDeltaAttention(nn.Module):
             output_final_state=use_cache,
             cu_seqlens=cu_seqlens
         )
-        if check_for_nan(k, "k after conv1d"):
-            return k
         
         v, conv_state_v = self.v_conv1d(
             x=v_proj,
@@ -210,26 +197,16 @@ class KimiDeltaAttention(nn.Module):
             output_final_state=use_cache,
             cu_seqlens=cu_seqlens
         )
-        if check_for_nan(v, "v after conv1d"):
-            return v
         
         # 检查门控机制
         g_a = self.f_a_proj(hidden_states)
-        if check_for_nan(g_a, "f_a_proj"):
-            return g_a
         
         g = self.f_b_proj(g_a)
-        if check_for_nan(g, "f_b_proj"):
-            return g
         
         # 这里是最可能出现 NaN 的地方
         g = fused_kda_gate(g, self.A_log, self.head_dim, g_bias=self.dt_bias)
-        if check_for_nan(g, "g after fused_kda_gate"):
-            return g
         
         beta = self.b_proj(hidden_states).float().sigmoid()
-        if check_for_nan(beta, "beta"):
-            return beta
 
         q, k = map(lambda x: rearrange(
             x, '... (h d) -> ... h d', d=self.head_k_dim), (q, k))
@@ -247,8 +224,6 @@ class KimiDeltaAttention(nn.Module):
                 use_qk_l2norm_in_kernel=True,
                 cu_seqlens=cu_seqlens,
             )
-            if check_for_nan(o, "output from chunk_kda"):
-                return o
         else:
             o, recurrent_state = fused_recurrent_kda(
                 q=q,
@@ -261,8 +236,6 @@ class KimiDeltaAttention(nn.Module):
                 use_qk_l2norm_in_kernel=True,
                 cu_seqlens=cu_seqlens,
             )
-            if check_for_nan(o, "output from fused_recurrent_kda"):
-                return o
                 
         if cache_params is not None:
             cache_params.recurrent_states[self.layer_idx] = recurrent_state
@@ -270,18 +243,12 @@ class KimiDeltaAttention(nn.Module):
                 conv_state_q, conv_state_k, conv_state_v)
 
         g = self.g_b_proj(self.g_a_proj(hidden_states))
-        if check_for_nan(g, "g after g_b_proj"):
-            return g
         
         g = rearrange(g, '... (h d) -> ... h d', d=self.head_dim)
         o = self.o_norm(o, g)
-        if check_for_nan(o, "o after o_norm"):
-            return o
 
         o = rearrange(o, 'b t h d -> b t (h d)')
         o = self.o_proj(o)
-        if check_for_nan(o, "final output"):
-            return o
             
         return o
 
@@ -305,6 +272,7 @@ class Attention(HuggingfaceAttention):
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
 
         self.layer_type = self.hf_config.layer_types[self.hf_layer_idx]
+        print(self.layer_type)
         if self.layer_type == "linear_attention":
             self.linear_attn = KimiDeltaAttention(self.hf_config, self.hf_layer_idx)
         elif self.layer_type == "full_attention":

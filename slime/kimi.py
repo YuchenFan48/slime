@@ -1,8 +1,8 @@
 # 文件路径: slime/custom_models.py
 
-from transformers import AutoConfig, AutoTokenizer, Qwen2Config, Qwen2Tokenizer, Qwen2TokenizerFast
+from transformers import AutoConfig, AutoTokenizer, Qwen2Config, Qwen2Tokenizer, Qwen2TokenizerFast, Qwen3NextConfig
 
-class Qwen3KimiConfig(Qwen2Config):
+class Qwen3KimiConfig(Qwen3NextConfig):
     model_type = "qwen3_kimi"
 
     def __init__(

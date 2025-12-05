@@ -178,7 +178,6 @@ class RolloutManager:
             data = data.samples
             # flatten the data if it is a list of lists
             data = [item for sublist in data for item in sublist]
-            print(len(data))
             if len(data) % self.args.global_batch_size != 0:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)

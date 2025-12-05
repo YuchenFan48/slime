@@ -10,8 +10,9 @@ import torch.distributed as dist
 from slime.utils.types import Sample
 from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
+import torch
 
-__all__ = ["Dataset"]
+__all__ = ["Dataset", "process_rollout_data"]
 
 
 # TODO: don't read the whole file into memory.
@@ -42,7 +43,44 @@ def _parse_generalized_path(s: str):
 
     return s, None
 
+# ==========================================
+# 1. 核心预处理逻辑
+# ==========================================
+def process_pretrain_sample(text: str, tokenizer, prefix_ids_cache):
+    """
+    预处理单个样本：添加 Special Token -> Tokenize -> 生成完整 Mask
+    """
+    text = text.strip()
+    if not text.startswith('<|begin_text|>'):
+        text = '<|begin_text|>' + text
+    if not text.endswith('<|end_text|>'):
+        text = text + '<|end_text|>'
 
+    # Tokenize
+    token_ids = tokenizer.encode(text, add_special_tokens=False)
+    
+    # 计算长度
+    prefix_len = len(prefix_ids_cache)
+    total_len = len(token_ids)
+    
+    # === 修改点：Response Length 算上 Begin 和 End Token ===
+    # 也就是整个序列都是 response
+    response_length = total_len
+    
+    # 构造完整 Mask
+    # 虽然 response_length 包含了前缀，但我们通常不计算第一个 token 的 loss（因为它没有上文）
+    # 所以这里前缀部分 mask 依然给 0，内容部分给 1
+    # 这样长度对齐了 (total_len)，但训练逻辑是正确的
+    if total_len <= prefix_len:
+        full_loss_mask = [0] * total_len
+    else:
+        full_loss_mask = [0] * prefix_len + [1] * (total_len - prefix_len)
+    
+    return token_ids, full_loss_mask, response_length
+
+# ==========================================
+# 2. Dataset 类
+# ==========================================
 class Dataset:
     def __init__(
         self,
@@ -61,60 +99,49 @@ class Dataset:
         apply_chat_template_kwargs=None,
     ):
         self.origin_samples = []
+        
+        # 预计算前缀 Token ID
+        prefix_ids_cache = tokenizer.encode("<|begin_text|>", add_special_tokens=False)
+        
         for data in read_file(path):
             if multimodal_keys:
-                prompt_content = []
-                if prompt_key in data:
-                    prompt_content.append({"type": "text", "text": data[prompt_key]})
-                for media_type, data_key in multimodal_keys.items():
-                    if data_key in data:
-                        media_path = data[data_key]
-                        prompt_content.append({"type": media_type, "path": media_path})
-            else:
                 prompt_content = data.get(prompt_key)
-
-            if apply_chat_template:
-                if tool_key is not None:
-                    tools = data[tool_key]
-                    if isinstance(tools, str):
-                        tools = json.loads(tools)
-                    elif isinstance(tools, np.ndarray):
-                        tools = tools.tolist()
-                    assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
+                if isinstance(prompt_content, list):
+                     raw_text = prompt_content[0].get('text', '')
                 else:
-                    tools = None
-                template_input = [{"role": "user", "content": prompt_content}] if multimodal_keys else prompt_content
-                prompt = tokenizer.apply_chat_template(
-                    template_input,
-                    tools,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                    **apply_chat_template_kwargs,
-                )
-
+                     raw_text = str(prompt_content)
             else:
-                prompt = prompt_content
+                raw_text = data.get(prompt_key, "")
 
-            # TODO: this is slow.
-            if max_length is not None:
-                raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-                if not multimodal_keys:
-                    if len(raw_prompt_ids) > max_length:
-                        continue
-
-            self.origin_samples.append(
-                Sample(
-                    prompt=prompt,
-                    label=data[label_key] if label_key is not None else None,
-                    metadata=data.get(metadata_key) or {},
-                )
+            # 计算
+            token_ids, full_loss_mask, res_len = process_pretrain_sample(
+                raw_text, tokenizer, prefix_ids_cache
             )
+
+            # 长度过滤
+            if max_length is not None and len(token_ids) > max_length:
+                continue
+
+            sample = Sample(
+                prompt=raw_text, 
+                label=data.get(label_key),
+                metadata=data.get(metadata_key) or {},
+            )
+            
+            # 1. Tokens
+            sample.tokens = torch.tensor(token_ids, dtype=torch.long)
+            
+            sample.loss_mask = full_loss_mask
+            
+            # 3. Response Length
+            sample.response_length = res_len
+            sample.reward = 0
+            
+            self.origin_samples.append(sample)
 
         self.epoch_id = -1
         self.seed = seed
-        # 如果需要shuffle，则对数据进行shuffle
         if shuffle:
-            # 使用seed初始化随机数生成器，确保可重现
             rng = random.Random(self.seed)
             rng.shuffle(self.origin_samples)
         self.samples = self.origin_samples
@@ -122,7 +149,6 @@ class Dataset:
     def shuffle(self, new_epoch_id):
         if self.epoch_id == new_epoch_id:
             return
-
         random.seed(self.seed + new_epoch_id)
         permutation = list(range(len(self.samples)))
         random.shuffle(permutation)
@@ -133,7 +159,7 @@ class Dataset:
         return self.samples[idx]
 
     def __len__(self):
-        return 1
+        return len(self.samples)
 
 
 def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
