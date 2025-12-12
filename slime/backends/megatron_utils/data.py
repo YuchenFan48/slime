@@ -349,6 +349,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
         response_lengths = rollout_data["response_lengths"]
+        max_response_length = max(rollout_data["response_lengths"])
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
 
@@ -375,6 +376,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
             else:
                 raise ValueError(f"Unsupported type: {type(val)}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
+        log_dict['max_response_length'] = max_response_length
 
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and reduced_log_dict is not None:

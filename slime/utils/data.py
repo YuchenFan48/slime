@@ -50,7 +50,7 @@ def process_pretrain_sample(text: str, tokenizer, prefix_ids_cache):
     """
     预处理单个样本：添加 Special Token -> Tokenize -> 生成完整 Mask
     """
-    text = text.strip()
+    text = text.strip().replace('<|endoftext|>', '')
     if not text.startswith('<|begin_text|>'):
         text = '<|begin_text|>' + text
     if not text.endswith('<|end_text|>'):
@@ -114,6 +114,9 @@ class Dataset:
                 raw_text = data.get(prompt_key, "")
 
             # 计算
+            if raw_text is None:
+                continue
+
             token_ids, full_loss_mask, res_len = process_pretrain_sample(
                 raw_text, tokenizer, prefix_ids_cache
             )
