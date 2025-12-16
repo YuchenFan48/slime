@@ -1,4 +1,4 @@
-NLAYERS=61
+NLAYERS=28
 FIRST_K_DENSE_REPLACE=3
 
 arr=()
@@ -15,10 +15,10 @@ printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
 # deepseek r1
 MODEL_ARGS=(
     --disable-bias-linear
-    --num-layers 61
-    --hidden-size 7168
-    --ffn-hidden-size 18432
-    --num-attention-heads 128
+    --num-layers 28
+    --hidden-size 1024
+    --ffn-hidden-size 3076
+    --num-attention-heads 16
     --kv-channels 128
     --normalization RMSNorm
     --position-embedding-type rope
@@ -28,11 +28,10 @@ MODEL_ARGS=(
     --vocab-size 129280
 
     --multi-latent-attention
-    --q-lora-rank 1536
-    --kv-lora-rank 512
-    --qk-head-dim 128
-    --qk-pos-emb-head-dim 64
-    --v-head-dim 128
+    --q-lora-rank 192
+    --kv-lora-rank 64
+    # --qk-pos-emb-head-dim 64
+    --v-head-dim 16
     --qk-layernorm
     --rotary-scaling-factor 40
     --rotary-base 10000
@@ -42,11 +41,11 @@ MODEL_ARGS=(
     --no-rope-fusion
 
     # moe
-    --num-experts 256
+    --num-experts 32
     --moe-layer-freq $MOE_LAYER_FREQ
-    --moe-ffn-hidden-size 2048
-    --moe-router-topk 8
-    --moe-shared-expert-intermediate-size 2048
+    --moe-ffn-hidden-size 512
+    --moe-router-topk 2
+    --moe-shared-expert-intermediate-size 412
     --moe-router-pre-softmax
     --moe-router-score-function sigmoid
     --moe-router-enable-expert-bias
@@ -55,7 +54,7 @@ MODEL_ARGS=(
     --moe-aux-loss-coeff 0
     --moe-router-bias-update-rate 0
     --moe-router-group-topk 4
-    --moe-router-num-groups 8
+    --moe-router-num-groups 2
     --moe-grouped-gemm
     --moe-router-topk-scaling-factor 2.5
     --moe-router-dtype fp32

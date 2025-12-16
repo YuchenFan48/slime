@@ -1,4 +1,4 @@
-NLAYERS=28
+NLAYERS=24
 FIRST_K_DENSE_REPLACE=0
 
 arr=()
@@ -19,12 +19,12 @@ MODEL_ARGS=(
    --disable-bias-linear
    --qk-layernorm
    --group-query-attention
-   --num-attention-heads 
+   --num-attention-heads 16
    --num-query-groups 2
    --kv-channels 128
-   --num-layers 28
-   --hidden-size 4096
-   --ffn-hidden-size 6144
+   --num-layers 24
+   --hidden-size 768
+   --ffn-hidden-size 3072
 
    --normalization RMSNorm
    --apply-layernorm-1p
@@ -52,7 +52,6 @@ MODEL_ARGS=(
    --moe-aux-loss-coeff 0.001
    --post-self-attn-layernorm
    --post-mlp-layernorm
-   --mtp-num-layers 1
 )
 
 # vocab size 151936 * 384 = 58M

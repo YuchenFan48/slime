@@ -25,8 +25,10 @@ class RolloutDataSource:
         self.sample_offset = 0
         
         # === 0. 初始化日志文件 ===
-        self.log_path = "debug.log"
-        # 每次重启类时，写入一个分割线，方便区分多次运行
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+        self.log_path = f"debug_{timestamp_str}.log"
+        
+        # 写入起始分割线
         self._log(f"\n{'='*20} NEW RUN STARTED {'='*20}")
         
         # === 1. 扫描文件 ===
@@ -37,6 +39,26 @@ class RolloutDataSource:
         else:
             self.data_files = [args.prompt_data]
         
+        files_to_skip = {'train_data_b1016_p030.parquet'} 
+        
+        # 记录过滤前的数量
+        original_count = len(self.data_files)
+        
+        if len(self.data_files) < original_count:
+            skipped_count = original_count - len(self.data_files)
+            # 如果你有 _log 函数就用 _log，没有就用 print
+            msg = f"[Init] Manually skipped {skipped_count} files found in blocklist: {files_to_skip}"
+            if hasattr(self, '_log'):
+                self._log(msg)
+            else:
+                print(msg, flush=True)
+
+        # 执行过滤
+        self.data_files = [
+            f for f in self.data_files 
+            if os.path.basename(f) not in files_to_skip
+        ]
+
         # 按文件名倒序排序
         self.data_files = sorted(
             [os.path.abspath(f) for f in self.data_files], 
