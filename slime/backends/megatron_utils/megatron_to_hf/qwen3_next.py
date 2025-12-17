@@ -104,6 +104,8 @@ def convert_qwen3_next_to_hf(args, name, param):
                     (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.k_proj.bias", k_bias),
                     (f"mtp.layers.{layer_idx}.transformer_layer.self_attn.v_proj.bias", v_bias),
                 ]
+            elif rest == "self_attention.linear_qgkv.layer_norm_weight":
+                return [(f"mtp.layers.{layer_idx}.input_layernorm.weight", param),]
             elif rest == "mlp.linear_fc1.weight":
                 gate_weight, up_weight = param.chunk(2, dim=0)
                 return [

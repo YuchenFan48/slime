@@ -271,33 +271,15 @@ class Attention(HuggingfaceAttention):
         if Qwen3NextAttention is None:
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
 
-        self.layer_type = self.hf_config.layer_types[self.hf_layer_idx]
-        print(self.layer_type)
-        if self.layer_type == "linear_attention":
-            self.linear_attn = KimiDeltaAttention(self.hf_config, self.hf_layer_idx)
-        elif self.layer_type == "full_attention":
-            self.rotary_emb = Qwen3NextRotaryEmbedding(config=self.hf_config)
-            self.self_attn = Qwen3NextAttention(self.hf_config, self.hf_layer_idx)
-
+        self.linear_attn = KimiDeltaAttention(self.hf_config, self.hf_layer_idx)
         self.input_layernorm = Qwen3NextRMSNorm(self.hf_config.hidden_size, eps=self.hf_config.rms_norm_eps)
 
-    def hf_forward(self, hidden_states, position_ids, packed_seq_params):
+    def hf_forward(self, hidden_states, packed_seq_params):
         hidden_states = self.input_layernorm(hidden_states)
-
-        if self.layer_type == "linear_attention":
-            hidden_states = self.linear_attn(
-                hidden_states=hidden_states,
-                cu_seqlens=packed_seq_params.cu_seqlens_q,
-            )
-        elif self.layer_type == "full_attention":
-            # Self Attention
-            position_embeddings = self.rotary_emb(hidden_states, position_ids)
-            hidden_states, _ = self.self_attn(
-                hidden_states=hidden_states,
-                attention_mask=None,
-                position_ids=position_ids,
-                position_embeddings=position_embeddings,
-            )
+        hidden_states = self.linear_attn(
+            hidden_states=hidden_states,
+            cu_seqlens=packed_seq_params.cu_seqlens_q,
+        )
         return hidden_states
 
 
@@ -319,12 +301,19 @@ def get_qwen3_next_spec(args, config, vp_stage):
     # Slice the layer specs to only include the layers that are built in this pipeline stage.
     # Note: MCore layer_number starts at 1
     num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
+    offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
+
+    hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
     for layer_id in range(num_layers_to_build):
-        transformer_layer_spec.layer_specs[layer_id].submodules.self_attention = ModuleSpec(
-            module=Attention,
-            params={"args": args},
-        )
+        print(hf_config.layer_types[layer_id + offset])
+        if hf_config.layer_types[layer_id + offset] == "linear_attention":
+            layer_specs = copy.deepcopy(transformer_layer_spec.layer_specs[layer_id])
+            layer_specs.submodules.self_attention = ModuleSpec(
+                module=Attention,
+                params={"args": args},
+            )
+            transformer_layer_spec.layer_specs[layer_id] = layer_specs
         transformer_layer_spec.layer_specs[layer_id].submodules.mlp.submodules.shared_experts.params = {"gate": True}
 
     return transformer_layer_spec

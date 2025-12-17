@@ -59,6 +59,7 @@ def _convert_layer_internal(args, layer_prefix, rest, param):
     # === [Attention] 标准 Self Attention (Full Attention) ===
     # 处理 QKV 权重切分 (Megatron 格式 -> HF 格式)
     if rest == "self_attention.linear_qgkv.weight":
+        print(layer_prefix)
         param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
         q_param, k_param, v_param = torch.split(
             param, split_size_or_sections=[2 * value_num_per_group, 1, 1], dim=1

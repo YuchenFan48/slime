@@ -199,7 +199,7 @@ class Qwen3KimiBridge(Qwen2MoEBridge):
                 bias_dropout_fusion=True,
                 moe_router_pre_softmax=False,
                 qk_layernorm=True,
-                use_gated_attention=False, # Kimi 使用 KDA，不使用 Next 的 Gated Delta
+                use_gated_attention=True, # Kimi 使用 KDA，不使用 Next 的 Gated Delta
             )
 
             # 2. 【关键修复】显式注入 Kimi 特有的参数
