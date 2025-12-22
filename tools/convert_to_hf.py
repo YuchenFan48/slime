@@ -40,7 +40,11 @@ def main(args):
     model, _, _, _ = megatron_utils.initialize_model_and_optimizer(args)
 
     hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-    model_name = type(hf_config).__name__.lower()
+    # 优先使用 --model-name 参数，如果没有设置则从 config 自动提取
+    if args.model_name is not None:
+        model_name = args.model_name.lower()
+    else:
+        model_name = type(hf_config).__name__.lower()
 
     tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 

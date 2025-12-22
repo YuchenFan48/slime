@@ -13,7 +13,7 @@ from .qwen2 import convert_qwen2_to_hf
 from .qwen3_next import convert_qwen3_next_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
 from .qwen3_kimi import convert_qwen3_kimi_to_hf
-
+from .qwen3_next_infllmv2 import convert_qwen3_next_infllmv2_to_hf
 
 def ceildiv(a, b):
     return -(-a // b)
@@ -123,14 +123,9 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
         converted_named_tensors = convert_glm4_to_hf(args, name, param)
     elif "qwen3moe" in model_name:
         converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
-    elif "qwen3next" in model_name:
-        converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
-    elif "qwen3kimi" in model_name:
-         converted_named_tensors = convert_qwen3_kimi_to_hf(args, name, param)
-    elif "qwen2" in model_name or "qwen3" in model_name:
-        converted_named_tensors = convert_qwen2_to_hf(args, name, param)
-    elif "deepseekv3" in model_name:
-        converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
+    elif "qwen3nextinfllmv2" in model_name:
+        # 必须在 qwen3next 之前检查，因为 qwen3next 是 qwen3nextinfllmv2 的子串
+        converted_named_tensors = convert_qwen3_next_infllmv2_to_hf(args, name, param)
         # to compatible with sglang implementation
         if args.q_lora_rank is not None:
             old_converted_named_tensors = converted_named_tensors
@@ -158,6 +153,14 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
                         cached_tensors[converted_name] = converted_param
                 else:
                     converted_named_tensors.append((converted_name, converted_param))
+    elif "qwen3next" in model_name:
+        converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
+    elif "qwen3kimi" in model_name:
+         converted_named_tensors = convert_qwen3_kimi_to_hf(args, name, param)
+    elif "qwen2" in model_name or "qwen3" in model_name:
+        converted_named_tensors = convert_qwen2_to_hf(args, name, param)
+    elif "deepseekv3" in model_name:
+        converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
 
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)

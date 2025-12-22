@@ -128,10 +128,10 @@ CKPT_ARGS=(
    # ⚠️ InfLLM V2 compatible config with modified hidden_size=2048
    # Using new config.json with correct architecture (16 heads MQA, head_dim=128)
    --hf-checkpoint /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-A0.5B-infllm-reduced
-   --ref-load /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-A0.5B-torch_dist-infllm-1120-reduced
+   --ref-load /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-A0.5B-torch_dist-infllm-1201-reduced
    # Training from scratch - use save path as load path (will initialize randomly)
-   --load /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-infllmv2-16heads-mqa-hdim128-1120-reduced/
-   --save /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-infllmv2-16heads-mqa-hdim128-1120-reduced/
+   --load /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-infllmv2-16heads-mqa-hdim128-1201-reduced/
+   --save /mnt/shared-storage-user/p1-shared/yuchenzhang/qwen-3-next-2B-infllmv2-16heads-mqa-hdim128-1201-reduced/
    --save-interval 2048
    --no-load-optim 
    # Model will initialize randomly if checkpoint doesn't exist

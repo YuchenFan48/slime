@@ -165,8 +165,26 @@ def get_qwen3_next_infllmv2_spec(args, config, vp_stage):
 
     hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
+    # 如果 layer_types 不存在，根据 linear_attention_interval 推断
+    if not hasattr(hf_config, 'layer_types') or hf_config.layer_types is None:
+        linear_attention_interval = getattr(hf_config, 'linear_attention_interval', 4)
+        num_hidden_layers = getattr(hf_config, 'num_hidden_layers', config.num_layers)
+        layer_types = []
+        for i in range(num_hidden_layers):
+            if i % linear_attention_interval == 0:
+                layer_types.append("linear_attention")
+            else:
+                layer_types.append("full_attention")
+        hf_config.layer_types = layer_types
+        print(f"Generated layer_types from linear_attention_interval={linear_attention_interval}: "
+              f"{layer_types[:10]}... (total {len(layer_types)} layers)")
+
     for layer_id in range(num_layers_to_build):
         layer_type = hf_config.layer_types[layer_id + offset]
+        
+        # 调试信息：打印前几层的类型
+        if layer_id < 3:
+            print(f"[DEBUG] Layer {layer_id + offset}: layer_type={layer_type}")
         
         if layer_type == "full_attention":
             # 对于 full_attention 层，使用 InfLLM V2
