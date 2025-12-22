@@ -44,6 +44,7 @@ class Qwen3NextBridge(Qwen2MoEBridge):
         "hnorm.weight": ["mtp.layers.{mtp_layer_index}.hnorm.weight"],
         "eh_proj.weight": ["mtp.layers.{mtp_layer_index}.eh_proj.weight"],
         "final_layernorm.weight": ["mtp.layers.{mtp_layer_index}.final_layernorm.weight"],
+        "input_layernorm.weight": ["mtp.layers.{mtp_layer_index}.input_layernorm.weight"]
     }
 
     def _weight_name_mapping_mtp(self, name: str, num_layers: int) -> list[str]:
@@ -52,7 +53,7 @@ class Qwen3NextBridge(Qwen2MoEBridge):
         mtp_layer_index = int(mtp_match.group(1)) if mtp_match else 0
         
         convert_names = []
-
+        print(name)
         # 1. 处理特殊层 (enorm, hnorm 等)
         for keyword, mapping_names in self._MTP_MAPPING.items():
             if keyword in name:

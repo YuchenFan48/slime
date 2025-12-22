@@ -123,10 +123,10 @@ PERF_ARGS=(
    --max-tokens-per-gpu 11264
 
 #    --fp8-param-gather
-   # --transformer-impl transformer_engine
-   # --bf16
-   # --fp8-format e4m3
-   # --fp8-recipe blockwise
+   --transformer-impl transformer_engine
+   --bf16
+   --fp8-format e4m3
+   --fp8-recipe blockwise
 )
 
 OPTIMIZER_ARGS=(

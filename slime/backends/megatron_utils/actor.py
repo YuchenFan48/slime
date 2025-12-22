@@ -31,7 +31,7 @@ from slime.utils.wandb_utils import init_wandb_secondary
 from ...utils.profile_utils import TrainProfiler
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
+from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data, get_data_iterator_eval
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -218,7 +218,7 @@ class MegatronTrainRayActor(TrainRayActor):
     ) -> None:
         # Prepare data and run forward pass to get log_probs
         rollout_data = self._get_rollout_data(rollout_data)
-        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        data_iterator, num_microbatches = get_data_iterator_eval(self.args, self.model, rollout_data)
         rollout_data.update(
             forward_only(
                 get_log_probs_and_entropy,

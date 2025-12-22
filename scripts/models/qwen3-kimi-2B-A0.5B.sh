@@ -20,10 +20,13 @@ MODEL_ARGS=(
    --disable-bias-linear
    --qk-layernorm
    --num-attention-heads 16
+   --group-query-attention
+   --num-query-groups 2
    --kv-channels 128
    --num-layers 28
    --hidden-size 1024
    --ffn-hidden-size 3072
+   --use-gated-attention
 
    --normalization RMSNorm
    --apply-layernorm-1p

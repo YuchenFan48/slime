@@ -427,6 +427,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
+                "--eval-batch-size",
+                type=int,
+                default=None
+            )
+
+            parser.add_argument(
                 "--prompt-data",
                 type=str,
                 default=None,

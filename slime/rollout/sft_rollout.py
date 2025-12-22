@@ -93,8 +93,8 @@ def eval_rollout_single_dataset(
         samples = sum(samples, [])
     
     # 调整样本数量以匹配批次大小
-    if len(samples) % args.global_batch_size != 0:
-        trim_len = (len(samples) // args.global_batch_size) * args.global_batch_size
+    if len(samples) % args.eval_batch_size != 0:
+        trim_len = (len(samples) // args.eval_batch_size) * args.eval_batch_size
         origin_data_length = len(samples)
         samples = samples[:trim_len]
         print(f"trim number of samples from {origin_data_length} to {trim_len}")

@@ -50,11 +50,9 @@ def process_pretrain_sample(text: str, tokenizer, prefix_ids_cache):
     """
     预处理单个样本：添加 Special Token -> Tokenize -> 生成完整 Mask
     """
-    text = text.strip().replace('<|endoftext|>', '')
-    if not text.startswith('<|begin_text|>'):
-        text = '<|begin_text|>' + text
-    if not text.endswith('<|end_text|>'):
-        text = text + '<|end_text|>'
+    text = text.strip().replace('<|endoftext|>', '').replace('<|im_start|>', '')
+    if not text.startswith('<|im_start|>'):
+        text = '<|im_start|>' + text
 
     # Tokenize
     token_ids = tokenizer.encode(text, add_special_tokens=False)
@@ -101,7 +99,7 @@ class Dataset:
         self.origin_samples = []
         
         # 预计算前缀 Token ID
-        prefix_ids_cache = tokenizer.encode("<|begin_text|>", add_special_tokens=False)
+        prefix_ids_cache = tokenizer.encode("<|im_start|>", add_special_tokens=False)
         
         for data in read_file(path):
             if multimodal_keys:

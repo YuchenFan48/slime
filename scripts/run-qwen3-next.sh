@@ -81,7 +81,9 @@ CKPT_ARGS=(
    --ref-load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-torch_dist
    # --load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-kda-fixed-data-aug-checked/
    # --save /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-kda-fixed-data-aug-checked/
-   # --save-interval 4096
+   # --load /apdcephfs/mnt/cephfs/users/yuchenfan/verify/
+   # --save /apdcephfs/mnt/cephfs/users/yuchenfan/verify/
+   # --save-interval 1
 )
 
 
@@ -96,8 +98,9 @@ SFT_ARGS=(
    --input-key text
    --rollout-shuffle
    --num-rollout 1000000
-   --rollout-batch-size 1024
-   --global-batch-size 1024
+   --rollout-batch-size 4096
+   --global-batch-size 4096
+   --eval-batch-size 512
 
    --loss-type sft_loss
    --calculate-per-token-loss
@@ -112,7 +115,7 @@ PERF_ARGS=(
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
-   --expert-model-parallel-size 4
+   --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
    # --recompute-granularity full
@@ -120,12 +123,12 @@ PERF_ARGS=(
    # --recompute-num-layers 1
    --balance-data
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 11264
+   --max-tokens-per-gpu 10240
 )
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 4e-3
+   --lr 1.6e-2
    --lr-decay-style WSD
    --lr-wsd-decay-style exponential
    --lr-wsd-decay-iters 100000

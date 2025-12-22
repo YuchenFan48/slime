@@ -26,6 +26,7 @@ def _convert_layer_internal(args, layer_prefix, rest, param):
         head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
     except:
         head_dim = args.hidden_size // args.num_attention_heads
+    print(args.num_query_groups)
     value_num_per_group = args.num_attention_heads // args.num_query_groups
 
     # === [LayerNorms] 处理层归一化 ===

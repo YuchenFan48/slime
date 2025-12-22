@@ -4,6 +4,7 @@ FIRST_K_DENSE_REPLACE=0
 arr=()
 for ((i=0; i<NLAYERS; i++)); do
   if (( i < FIRST_K_DENSE_REPLACE )); then
+  
     arr+=(0)
   else
     arr+=(1)
@@ -18,13 +19,14 @@ MODEL_ARGS=(
 
    --disable-bias-linear
    --qk-layernorm
+   --num-attention-heads 16
    --group-query-attention
-   --num-attention-heads 
-   --num-query-groups 2
+   --num-query-groups 1
    --kv-channels 128
    --num-layers 28
-   --hidden-size 4096
-   --ffn-hidden-size 6144
+   --hidden-size 1024
+   --ffn-hidden-size 3072
+   --use-gated-attention
 
    --normalization RMSNorm
    --apply-layernorm-1p
