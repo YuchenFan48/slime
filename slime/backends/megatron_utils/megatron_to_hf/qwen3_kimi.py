@@ -26,7 +26,6 @@ def _convert_layer_internal(args, layer_prefix, rest, param):
         head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
     except:
         head_dim = args.hidden_size // args.num_attention_heads
-    print(args.num_query_groups)
     value_num_per_group = args.num_attention_heads // args.num_query_groups
 
     # === [LayerNorms] 处理层归一化 ===
@@ -60,7 +59,6 @@ def _convert_layer_internal(args, layer_prefix, rest, param):
     # === [Attention] 标准 Self Attention (Full Attention) ===
     # 处理 QKV 权重切分 (Megatron 格式 -> HF 格式)
     if rest == "self_attention.linear_qgkv.weight":
-        print(layer_prefix)
         param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
         q_param, k_param, v_param = torch.split(
             param, split_size_or_sections=[2 * value_num_per_group, 1, 1], dim=1
@@ -176,6 +174,8 @@ def convert_qwen3_kimi_to_hf(args, name, param):
     """
     转换入口函数
     """
+    if torch.all(param == 0):
+        print(f"[WARNING] Input tensor '{name}' is all zeros!")
     # 1. Embeddings & Heads & Global Norms
     if name == "module.module.embedding.word_embeddings.weight":
         return [("model.embed_tokens.weight", param)]
