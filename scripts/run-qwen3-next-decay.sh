@@ -81,9 +81,9 @@ CKPT_ARGS=(
    --ref-load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-3-next-2B-A0.5B-torch_dist
    # --load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-kda-fixed-data-aug-checked/
    # --save /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-kda-fixed-data-aug-checked/
-   --load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen3-kda-new-data-4m/
-   --save /apdcephfs/mnt/cephfs/users/yuchenfan/qwen3-kda-new-data-4m/
-   --save-interval 2048
+   --load /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-kda-gqa/
+   --save /apdcephfs/mnt/cephfs/users/yuchenfan/qwen-kda-gqa/
+   --save-interval 4096
 )
 
 
@@ -94,12 +94,12 @@ EVAL_ARGS=(
 
 SFT_ARGS=(
    --rollout-function-path slime.rollout.sft_rollout.generate_rollout
-   --prompt-data /apdcephfs/mnt/cephfs/data/final_train_data_parquet
+   --prompt-data /apdcephfs/mnt/cephfs/users/yuchenfan/final_train_data_parquet
    --input-key text
    --rollout-shuffle
    --num-rollout 1000000
-   --rollout-batch-size 4096
-   --global-batch-size 4096
+   --rollout-batch-size 2048
+   --global-batch-size 2048
    --eval-batch-size 512
 
    --loss-type sft_loss
@@ -133,7 +133,7 @@ OPTIMIZER_ARGS=(
    --lr-wsd-decay-style exponential
    --lr-wsd-decay-iters 20000
    --lr-warmup-iters 2000
-   --lr-decay-iters 1000000
+   --lr-decay-iters 70000
    --min-lr 0
    --adam-beta1 0.9
    --adam-beta2 0.95

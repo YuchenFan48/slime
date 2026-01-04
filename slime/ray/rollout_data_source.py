@@ -39,7 +39,7 @@ class RolloutDataSource:
         else:
             self.data_files = [args.prompt_data]
         
-        files_to_skip = {'train_data_b1016_p030.parquet'} 
+        files_to_skip = {'train_data_b1016_p030.parquet', 'train_data_b0001_p031.parquet', "train_data_b0014_p005.parquet"} 
         
         # 记录过滤前的数量
         original_count = len(self.data_files)
@@ -63,7 +63,6 @@ class RolloutDataSource:
         self.data_files = sorted(
             [os.path.abspath(f) for f in self.data_files], 
             key=lambda x: os.path.basename(x), 
-            reverse=True
         )
         
         self.total_files = len(self.data_files)
@@ -292,12 +291,14 @@ class RolloutDataSource:
     def save(self, rollout_id):
         if not self.args.rollout_global_dataset: return
         
+        current_fname = os.path.basename(self.data_files[self.current_file_index - 1]) if self.current_file_index > 0 else None
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,
             "sample_group_index": self.sample_group_index,
             "sample_index": self.sample_index,
             "metadata": self.metadata,
+            "current_file_name": current_fname,
             "current_file_index": self.current_file_index, 
         }
         path = os.path.join(self.args.save, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
@@ -306,36 +307,70 @@ class RolloutDataSource:
         # self._log(f"[Save] Saved state to {path}")
 
     def load(self, rollout_id=None):
-        if not self.args.rollout_global_dataset or self.args.load is None: return
+        if not self.args.rollout_global_dataset or self.args.load is None:
+            return
+        
         path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
-        if not os.path.exists(path): return
+        if not os.path.exists(path):
+            self._log(f"[Load] No checkpoint found at {path}, starting from scratch.")
+            return
         
         self._log(f"[Load] Loading state from {path}")
-        state_dict = torch.load(path)
+        state_dict = torch.load(path, map_location="cpu")
         
-        self.sample_offset = state_dict.get("sample_offset", 0)
+        # 1. 基础状态恢复
         self.epoch_id = state_dict.get("epoch_id", 0)
+        self.sample_offset = state_dict.get("sample_offset", 0)
         self.sample_group_index = state_dict.get("sample_group_index", 0)
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
         
         saved_file_index = state_dict.get("current_file_index", 0)
-        
-        self._log(f"[Load] State Dict info -> File Index: {saved_file_index}, Offset: {self.sample_offset}")
-        
-        # 检查是否发生跳过
-        if saved_file_index > 0:
-            skipped_count = saved_file_index - 1
-            skipped_names = [os.path.basename(f) for f in self.data_files[:skipped_count]]
-            self._log(f"[Load] !!! SKIPPING {skipped_count} FILES due to resume: {skipped_names}")
+        saved_file_name = state_dict.get("current_file_name", None)
 
-        resume_index = max(0, saved_file_index - 1) if saved_file_index > 0 else 0
+        # 2. 定位恢复的起始文件索引 (resume_index)
+        resume_index = -1
         
+        # 优先通过文件名匹配（解决 579 变 551 的偏移问题）
+        if saved_file_name:
+            for i, f in enumerate(self.data_files):
+                if os.path.basename(f) == saved_file_name:
+                    resume_index = i
+                    self._log(f"[Load] Found saved file '{saved_file_name}' at current index {resume_index}")
+                    break
+        
+        # 如果文件名匹配失败，尝试使用旧的数字索引
+        if resume_index == -1:
+            if saved_file_index > 0:
+                resume_index = max(0, saved_file_index - 1)
+                self._log(f"[Load] WARNING: Filename match failed. Falling back to index {resume_index}")
+            else:
+                resume_index = 0
+                self._log(f"[Load] Starting from index 0.")
+
+        # 3. 彻底重置加载状态，准备从新位置启动
+        # 先停止可能存在的后台线程
+        self._stop_background_thread()
+        
+        # 设置主线程的 current_file_index。
+        # 注意：load_next_file_from_queue() 内部会执行 += 1
+        # 所以我们设为 resume_index，load 完之后它会变成正确的 resume_index + 1
+        self.current_file_index = resume_index
+        
+        # 启动后台加载线程，从 resume_index 开始
         self._start_loader_thread(start_index=resume_index)
-        self.load_next_file_from_queue()
-        self.current_file_index = resume_index + 1
         
-        self._log(f"[Load] Resumed successfully. Current file: {os.path.basename(self.data_files[self.current_file_index-1])}")
+        # 从队列中取出对应的第一个数据集对象
+        self.load_next_file_from_queue()
+        
+        # 4. 最终状态校验日志
+        actual_fname = os.path.basename(self.data_files[self.current_file_index-1])
+        self._log(f"[Load] Resumed successfully:")
+        self._log(f"    - Epoch: {self.epoch_id}")
+        self._log(f"    - File Seq: {self.current_file_index}/{self.total_files}")
+        self._log(f"    - File Name: {actual_fname}")
+        self._log(f"    - Offset: {self.sample_offset}")
+
 
 class RolloutDataSourceWithBuffer(RolloutDataSource):
     def __init__(self, args):

@@ -128,7 +128,7 @@ PERF_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 5.6e-3
+   --lr 8e-3
    --lr-decay-style WSD
    --lr-wsd-decay-style exponential
    --lr-wsd-decay-iters 20000
