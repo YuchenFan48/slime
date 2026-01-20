@@ -26,6 +26,7 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
+from slime.utils.batch_size_scheduler import get_current_global_batch_size, update_consumed_samples
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -544,8 +545,10 @@ def train_one_step(
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
         # Update learning rate.
+        # Use current global batch size for proper rampup support
+        current_gbs = get_current_global_batch_size(args)
         assert update_successful
-        opt_param_scheduler.step(increment=args.global_batch_size)
+        opt_param_scheduler.step(increment=current_gbs)
 
     # release grad
     for model_chunk in model:
@@ -691,6 +694,27 @@ def train(
                 mtp_losses = (tracker["values"] * mtp_loss_scale).item()
                 MTPLossLoggingHelper.clean_loss_in_tracker()
 
+        # Collect mHC log_amax metrics for stability monitoring
+        mhc_log_amax_mean = None
+        mhc_log_amax_max = None
+        if getattr(args, 'log_mhc_amax', False) and getattr(args, 'use_manifold_hyper_connections', False):
+            log_amax_values = []
+            for model_module in model:
+                for name, module in model_module.named_modules():
+                    # Check attention hyper_conn
+                    if hasattr(module, 'hyper_conn_attn') and module.hyper_conn_attn is not None:
+                        val = module.hyper_conn_attn.get_log_amax()
+                        if val is not None:
+                            log_amax_values.append(val)
+                    # Check MLP hyper_conn
+                    if hasattr(module, 'hyper_conn_mlp') and module.hyper_conn_mlp is not None:
+                        val = module.hyper_conn_mlp.get_log_amax()
+                        if val is not None:
+                            log_amax_values.append(val)
+            if log_amax_values:
+                mhc_log_amax_mean = sum(log_amax_values) / len(log_amax_values)
+                mhc_log_amax_max = max(log_amax_values)
+
         # per train step log.
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -707,6 +731,11 @@ def train(
             log_dict[f"train/{role_tag}grad_norm"] = grad_norm
             if args.enable_mtp_training:
                 log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses
+            
+            # Add mHC log_amax metrics
+            if mhc_log_amax_mean is not None:
+                log_dict[f"train/{role_tag}mhc_log_amax_mean"] = mhc_log_amax_mean
+                log_dict[f"train/{role_tag}mhc_log_amax_max"] = mhc_log_amax_max
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
@@ -730,6 +759,13 @@ def train(
                     assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
 
             print(f"{role_tag}step {accumulated_step_id}: {log_dict}")
+
+    # Update consumed samples for batch size rampup scheduler
+    # Each step processes current_gbs samples
+    current_gbs = get_current_global_batch_size(args)
+    samples_consumed_this_rollout = num_steps_per_rollout * current_gbs
+    update_consumed_samples(samples_consumed_this_rollout)
+
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)

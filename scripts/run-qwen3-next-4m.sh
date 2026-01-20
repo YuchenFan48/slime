@@ -167,6 +167,17 @@ MTP_TRAINING_ARGS=(
    --mtp-num-layers 1
 )
 
+# Manifold-Constrained Hyper-Connections (mHC) arguments
+# Reference: DeepSeek mHC paper (arXiv:2512.24880)
+MHC_ARGS=(
+   --use-hyper-connections           # Enable Hyper-Connections
+   --use-manifold-hyper-connections  # Use mHC (Sinkhorn projection) for stable training
+   --num-residual-streams 4          # Expansion rate n=4 (paper recommendation)
+   --mhc-sinkhorn-iters 20           # Sinkhorn iterations tmax=20
+   --hyper-connections-dropout 0.0   # No dropout for HC
+   --log-mhc-amax                    # Log Amax metrics for stability monitoring
+)
+
 
 # Set PYTHONPATH for the training environment
 export PYTHONPATH="/apdcephfs/mnt/cephfs/users/yuchenfan/Megatron-LM/:${SCRIPT_DIR}:$PYTHONPATH"
@@ -195,7 +206,8 @@ if [ $MASTER_ADDR == $LOCAL_ADDR ]; then
         ${SGLANG_ARGS[@]} \
         ${MISC_ARGS[@]} \
         ${CUSTOM_ARGS[@]} \
-        ${MTP_TRAINING_ARGS[@]}
+        ${MTP_TRAINING_ARGS[@]} \
+        ${MHC_ARGS[@]}
 else
     echo "Starting as worker node..."
     ray stop --force
