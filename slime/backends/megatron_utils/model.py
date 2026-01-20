@@ -691,10 +691,11 @@ def train(
                 mtp_losses = (tracker["values"] * mtp_loss_scale).item()
                 MTPLossLoggingHelper.clean_loss_in_tracker()
 
-        # Collect mHC log_amax metrics for stability monitoring
-        mhc_log_amax_mean = None
-        mhc_log_amax_max = None
-        if getattr(args, 'log_mhc_amax', False) and getattr(args, 'use_manifold_hyper_connections', False):
+        # Collect HC/mHC log_amax metrics for stability monitoring
+        # Works for both HC and mHC (mHC should show ~0, HC may show larger values)
+        hc_log_amax_mean = None
+        hc_log_amax_max = None
+        if getattr(args, 'log_mhc_amax', False) and getattr(args, 'use_hyper_connections', False):
             log_amax_values = []
             for model_module in model:
                 for name, module in model_module.named_modules():
@@ -709,8 +710,8 @@ def train(
                         if val is not None:
                             log_amax_values.append(val)
             if log_amax_values:
-                mhc_log_amax_mean = sum(log_amax_values) / len(log_amax_values)
-                mhc_log_amax_max = max(log_amax_values)
+                hc_log_amax_mean = sum(log_amax_values) / len(log_amax_values)
+                hc_log_amax_max = max(log_amax_values)
 
         # per train step log.
         if (
@@ -729,10 +730,10 @@ def train(
             if args.enable_mtp_training:
                 log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses
             
-            # Add mHC log_amax metrics
-            if mhc_log_amax_mean is not None:
-                log_dict[f"train/{role_tag}mhc_log_amax_mean"] = mhc_log_amax_mean
-                log_dict[f"train/{role_tag}mhc_log_amax_max"] = mhc_log_amax_max
+            # Add HC/mHC log_amax metrics
+            if hc_log_amax_mean is not None:
+                log_dict[f"train/{role_tag}hc_log_amax_mean"] = hc_log_amax_mean
+                log_dict[f"train/{role_tag}hc_log_amax_max"] = hc_log_amax_max
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
