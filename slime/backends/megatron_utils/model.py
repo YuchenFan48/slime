@@ -26,7 +26,6 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from slime.utils.batch_size_scheduler import get_current_global_batch_size, update_consumed_samples
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -545,10 +544,8 @@ def train_one_step(
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
         # Update learning rate.
-        # Use current global batch size for proper rampup support
-        current_gbs = get_current_global_batch_size(args)
         assert update_successful
-        opt_param_scheduler.step(increment=current_gbs)
+        opt_param_scheduler.step(increment=args.global_batch_size)
 
     # release grad
     for model_chunk in model:
@@ -759,12 +756,6 @@ def train(
                     assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
 
             print(f"{role_tag}step {accumulated_step_id}: {log_dict}")
-
-    # Update consumed samples for batch size rampup scheduler
-    # Each step processes current_gbs samples
-    current_gbs = get_current_global_batch_size(args)
-    samples_consumed_this_rollout = num_steps_per_rollout * current_gbs
-    update_consumed_samples(samples_consumed_this_rollout)
 
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:

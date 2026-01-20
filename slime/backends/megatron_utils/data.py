@@ -154,6 +154,7 @@ def gather_log_data(
         }
         # log_with_file(f"{metric_name} {rollout_id}: {reduced_log_dict}", args=args)
         # Calculate step once to avoid duplication
+        # Note: For step calculation, we use target global_batch_size for consistency
         step = (
             rollout_id
             if not args.wandb_always_use_train_step
@@ -258,6 +259,9 @@ def get_data_iterator(
       `max_tokens_per_gpu` and per-sample lengths, all-reduces to a DP-wide
       maximum, optionally enforces divisibility for Virtual Pipeline Parallelism (VPP), and builds a balanced
       index schedule to equalize token counts across micro-batches.
+
+    When rampup_batch_size is enabled, uses the current dynamic global batch size
+    instead of the target global_batch_size.
 
     Returns `(data_iterators, num_microbatches)` where:
     - `data_iterators`: list of `DataIterator`, one per VPP stage (size 1 if VPP disabled)

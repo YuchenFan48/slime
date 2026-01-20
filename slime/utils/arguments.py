@@ -507,6 +507,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # mbs for the training, will be ignored if `use_dynamic_batch_size` is set.
             reset_arg(parser, "--micro-batch-size", type=int, default=1)
+
             parser.add_argument(
                 "--balance-data",
                 action="store_true",
@@ -711,6 +712,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--gamma", type=float, default=1.0, help="PPO GAE gamma")
             parser.add_argument("--lambd", type=float, default=1.0, help="PPO GAE lambd")
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
+            parser.add_argument(
+                "--disable-cp-all-gather",
+                action="store_true",
+                default=False,
+                help="Disable all gather in context parallel mode for hf_attention. When enabled, skip all_gather operations in HuggingfaceAttention forward, assuming fla/mgt natively support CP.",
+            )
             parser.add_argument(
                 "--disable-grpo-std-normalization",
                 action="store_false",
