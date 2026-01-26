@@ -3,6 +3,8 @@ export PARTITION=${GROUP:-"default"}
 # 修改成你的路径！！！！！！！！！！！"""
 export CFSCTL=/mnt/shared-storage-user/p1-shared/yuchenzhang/cfs/bin/cfsctl
 export CFG=/mnt/shared-storage-user/p1-shared/yuchenzhang/cfs/cfsd.cfg
+# 默认启用 CFS/FUSE（设置为1可跳过）
+export SKIP_CFS=${SKIP_CFS:-0}
 export TORCH_CUDA_ARCH_LIST="9.0"
 
 # Multi-node environment (defaults for single-node if not provided)
@@ -10,6 +12,17 @@ export RANK=${NODE_RANK:-0}
 export NODE_COUNT=${KUBEBRAIN_REPLICA_TOTAL:-1}
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 export PROC_PER_NODE=${PROC_PER_NODE:-8}
+
+# Configure apt proxy if http_proxy is set
+if [ -n "$http_proxy" ]; then
+    echo "Configuring apt to use proxy: $http_proxy"
+    mkdir -p /etc/apt/apt.conf.d
+    echo "Acquire::http::Proxy \"$http_proxy\";" > /etc/apt/apt.conf.d/99proxy
+    echo "Acquire::https::Proxy \"${https_proxy:-$http_proxy}\";" >> /etc/apt/apt.conf.d/99proxy
+fi
+
+# Remove all other apt source files that might contain external sources
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 
 # Replace sources.list with new configuration
 tee /etc/apt/sources.list > /dev/null << 'EOF'
@@ -38,25 +51,95 @@ gfortran bzip2 flex libpmix-dev libnl-3-dev libibverbs-dev libssl-dev \
 gdb numactl python3 python3-venv python3-pip binutils-dev
 
 # ========== Clean up existing CFS instance before starting ==========
-echo "Checking for existing CFS instances..."
-if ps aux | grep -v grep | grep -q "cfsd.*$PARTITION"; then
-    echo "Found existing CFS instance, stopping it..."
-    $CFSCTL -p $PARTITION -s $CFG stop 2>/dev/null || true
-    sleep 2
-    # Force kill if still running
-    pkill -9 cfsd 2>/dev/null || true
-    pkill -9 cfsfuse 2>/dev/null || true
-    sleep 1
+if [ "${SKIP_CFS:-0}" != "1" ]; then
+    echo "Checking for existing CFS instances..."
+    if ps aux | grep -v grep | grep -q "cfsd.*$PARTITION"; then
+        echo "Found existing CFS instance, stopping it..."
+        $CFSCTL -p $PARTITION -s $CFG stop 2>/dev/null || true
+        sleep 2
+        # Force kill if still running
+        pkill -9 cfsd 2>/dev/null || true
+        pkill -9 cfsfuse 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Clean up lock files and unmount
+    rm -f /mnt/shared-storage-user/p1-shared/yuchenzhang/cfs/run/default/default/cfsd-*.lock 2>/dev/null || true
+    rm -f /mnt/shared-storage-user/p1-shared/yuchenzhang/cfs/run/default/default/server-info-file 2>/dev/null || true
+    umount -l /nvme/fanyuchen/pretrain 2>/dev/null || true
+
+    # Load FUSE kernel module if not already loaded
+    echo "Checking FUSE support..."
+    FUSE_MODULE_LOADED=false
+    FUSE_DEVICE_EXISTS=false
+
+    # Check if FUSE module is loaded
+    if lsmod | grep -q "^fuse "; then
+        echo "FUSE kernel module is already loaded."
+        FUSE_MODULE_LOADED=true
+    else
+        echo "FUSE kernel module not loaded, attempting to load..."
+        # Try loading with modprobe
+        if modprobe fuse 2>/dev/null; then
+            echo "Successfully loaded FUSE kernel module."
+            FUSE_MODULE_LOADED=true
+        else
+            # Try with sudo if available
+            if command -v sudo >/dev/null 2>&1; then
+                echo "Trying to load FUSE module with sudo..."
+                if sudo modprobe fuse 2>/dev/null; then
+                    echo "Successfully loaded FUSE kernel module with sudo."
+                    FUSE_MODULE_LOADED=true
+                fi
+            fi
+            if [ "$FUSE_MODULE_LOADED" = false ]; then
+                echo "Warning: Failed to load FUSE kernel module."
+                echo "This may require root privileges or container capabilities."
+            fi
+        fi
+    fi
+
+    # Check if FUSE device exists
+    if [ -e /dev/fuse ]; then
+        echo "FUSE device /dev/fuse exists."
+        FUSE_DEVICE_EXISTS=true
+    else
+        echo "Warning: FUSE device /dev/fuse does not exist."
+    fi
+
+    # Final check and handle FUSE unavailability
+    if [ "$FUSE_MODULE_LOADED" = false ] && [ "$FUSE_DEVICE_EXISTS" = false ]; then
+        echo "ERROR: FUSE is not available. CFS requires FUSE to mount the filesystem."
+        echo ""
+        echo "Solutions:"
+        echo "1. If running via rjob, add: --custom-resources brainpp.cn/fuse=1"
+        echo "2. If running in a container, use --privileged or --cap-add SYS_MODULE"
+        echo "3. If data is already available locally, set SKIP_CFS=1 to skip CFS mount"
+        echo ""
+        echo "FUSE is required for CFS. Exiting..."
+        exit 1
+    else
+        echo "FUSE support confirmed. Starting CFS..."
+        $CFSCTL -p $PARTITION -n $NODE_COUNT -X $MASTER_ADDR -s $CFG start
+        CFS_START_EXIT_CODE=$?
+        
+        if [ $CFS_START_EXIT_CODE -ne 0 ]; then
+            echo "ERROR: CFS failed to start (exit code: $CFS_START_EXIT_CODE)"
+            exit 1
+        fi
+        
+        # Wait a moment and check if fuse daemon is running
+        sleep 2
+        if ! pgrep -f "cfsfuse" > /dev/null; then
+            echo "WARNING: CFS started but fuse daemon may not be running."
+            echo "This might cause issues accessing mounted paths."
+        else
+            echo "CFS and fuse daemon started successfully."
+        fi
+    fi
+else
+    echo "SKIP_CFS=1 已设置，本次运行跳过 CFS/FUSE 挂载。"
 fi
-
-# Clean up lock files and unmount
-rm -f /mnt/shared-storage-user/p1-shared/yuchenzhang/cfs/run/default/default/cfsd-*.lock 2>/dev/null || true
-rm -f /mnt/shared-storage-user/p1-shared/yuchenzhang/cfs/run/default/default/server-info-file 2>/dev/null || true
-umount -l /nvme/fanyuchen/pretrain 2>/dev/null || true
-
-echo "Starting CFS..."
-$CFSCTL -p $PARTITION -n $NODE_COUNT -X $MASTER_ADDR -s $CFG start;   
-[ $? -ne 0 ] && exit 1
 
 cd /mnt/shared-storage-user/p1-shared/yuchenzhang/slime
 pip install -U brainpp -i http://mirrors.i.h.pjlab.org.cn/pypi/simple/ --trusted-host mirrors.i.h.pjlab.org.cn
@@ -126,9 +209,9 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 CKPT_ARGS=(
    --hf-checkpoint /mnt/shared-storage-user/p1-shared/yuchenzhang/gpt-oss-2b-A0.5B
    --ref-load /mnt/shared-storage-user/p1-shared/yuchenzhang/gpt-oss-2b-A0.5B-torch_dist
-   --load /mnt/shared-storage-user/p1-shared/yuchenzhang/gpt-oss-2b-A0.5B-pretrain-lr-std-loss-mask-yuchenzhang-new-5e-3-exp-hidden-1024-16-newdata/
-   --save /mnt/shared-storage-user/p1-shared/yuchenzhang/gpt-oss-2b-A0.5B-pretrain-lr-std-loss-mask-yuchenzhang-new-5e-3-exp-hidden-1024-16-newdata/
-   --save-interval 4096
+   --load /mnt/shared-storage-user/p1-shared/yuchenzhang/gpt-oss-2b-A0.5B-0114-newdata-v2/
+   --save /mnt/shared-storage-user/p1-shared/yuchenzhang/gpt-oss-2b-A0.5B-0114-newdata-v2/
+   --save-interval 2048
    --no-load-optim  # 跳过优化器状态加载，避免sharding类型不兼容
 )
 
@@ -140,7 +223,7 @@ EVAL_ARGS=(
 
 SFT_ARGS=(
    --rollout-function-path slime.rollout.sft_rollout.generate_rollout
-   --prompt-data /mnt/shared-storage-user/p1-shared/fanyuchen/pretrain/pretrain/dolmo/processed_data/_merged_dclm
+   --prompt-data /nvme/fanyuchen/pretrain/processed_data
    --input-key text
    --rollout-shuffle
    --num-rollout 100000
@@ -174,7 +257,7 @@ PERF_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 5e-3
+   --lr 4e-3
    --lr-decay-style WSD
    --lr-wsd-decay-style exponential
    --lr-wsd-decay-iters 10000
@@ -182,7 +265,7 @@ OPTIMIZER_ARGS=(
    --lr-decay-iters 100000
    --min-lr 0
    --adam-beta1 0.9
-   --adam-beta2 0.98
+   --adam-beta2 0.95
    # --weight-decay 0.1
    # 其他训练参数，如 --global-batch-size, --train-iters 等
    # --train-iters 10000  # 明确指定总步数
@@ -207,11 +290,7 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-MTP_TRAINING_ARGS=(
-   # --enable-mtp-training  # 如果需要启用MTP训练，取消注释此行
-   --mtp-loss-scaling-factor 0.1
-   --mtp-num-layers 1
-)
+# n n
 
 # ========= 启动 Ray =========
 if [ "$RANK" == "0" ]; then
