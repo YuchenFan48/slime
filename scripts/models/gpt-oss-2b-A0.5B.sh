@@ -90,7 +90,7 @@ MODEL_ARGS=(
   # HuggingFace config has intermediate_size=1024
   # Setting to 512 for MoE expert size
    --moe-ffn-hidden-size 1024
-   --num-experts 16
+   --num-experts 32
    --moe-router-topk 2
    --moe-layer-freq $MOE_LAYER_FREQ
    --moe-router-score-function softmax
