@@ -18,7 +18,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
-from transformers import AutoTokenizer
 
 from slime.utils.data import Dataset
 from slime.utils.misc import load_function
@@ -88,12 +87,19 @@ class RolloutDataSourceMultiFile:
         else:
             self._log("[Init] WARNING: No files found!")
 
-        # 2. Initialize Tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        # 2. Initialize Tokenizer and Processor
+        from slime.utils.processing_utils import load_processor, load_tokenizer
+        self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+        self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
+        
         if args.rollout_global_dataset and (d := args.dump_details) is not None:
             path = Path(d) / "tokenizer"
             if not path.exists():
                 self.tokenizer.save_pretrained(path)
+            if self.processor:
+                processor_path = Path(d) / "processor"
+                if not processor_path.exists():
+                    self.processor.save_pretrained(processor_path)
 
         # === 3. Async loading setup ===
         self.dataset = None
@@ -123,13 +129,16 @@ class RolloutDataSourceMultiFile:
             ds = Dataset(
                 file_path,
                 tokenizer=self.tokenizer,
+                processor=self.processor,
                 max_length=self.args.rollout_max_prompt_len,
                 prompt_key=self.args.input_key,
+                multimodal_keys=getattr(self.args, 'multimodal_keys', None),
                 label_key=self.args.label_key,
                 metadata_key=self.args.metadata_key,
                 tool_key=self.args.tool_key,
                 seed=self.args.rollout_seed,
-                shuffle=True
+                apply_chat_template=getattr(self.args, 'apply_chat_template', False),
+                apply_chat_template_kwargs=getattr(self.args, 'apply_chat_template_kwargs', None),
             )
             
             if self.args.rollout_shuffle and not hasattr(ds, 'shuffled'):
