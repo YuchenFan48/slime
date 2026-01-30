@@ -99,9 +99,18 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     args = get_args()
     load_path = args.load
 
-    assert Path(load_path).exists() and _is_dir_nonempty(
-        load_path
-    ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
+    # Support random initialization: skip loading if --random-init or load_path is empty/None
+    if getattr(args, 'random_init', False):
+        logger.info("Random initialization enabled, skipping checkpoint loading")
+        return 0, 0
+    
+    if load_path is None:
+        logger.info("No checkpoint path specified, using random initialization")
+        return 0, 0
+    
+    if not Path(load_path).exists() or not _is_dir_nonempty(load_path):
+        logger.warning(f"Checkpoint path {load_path} does not exist or is empty, using random initialization")
+        return 0, 0
 
     if _is_megatron_checkpoint(load_path):
         return _load_checkpoint_megatron(

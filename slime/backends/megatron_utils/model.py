@@ -103,7 +103,10 @@ def setup_model_and_optimizer(
             - The learning-rate/weight-decay scheduler tied to the optimizer.
     """
     assert not args.moe_use_upcycling
-    assert args.load is not None or args.pretrained_checkpoint is not None
+    # Allow random initialization if --random-init is specified
+    if not getattr(args, 'random_init', False):
+        assert args.load is not None or args.pretrained_checkpoint is not None, \
+            "Must specify --load or --pretrained-checkpoint, or use --random-init for random initialization"
 
     model = get_model(
         wrap_model_provider_with_freeze(get_model_provider_func(args, role), args), ModelType.encoder_or_decoder

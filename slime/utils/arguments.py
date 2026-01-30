@@ -740,6 +740,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--ref-ckpt-step", type=int, default=None, help="The checkpoint step for reference model. "
             )
             reset_arg(parser, "--load", type=str, default=None)
+            parser.add_argument(
+                "--random-init",
+                action="store_true",
+                default=False,
+                help="Use random initialization instead of loading from checkpoint. "
+                     "This allows training from scratch without specifying --load.",
+            )
             reset_arg(parser, "--save", type=str, default=None)
             reset_arg(parser, "--save-interval", type=int, default=None)
             reset_arg(parser, "--async-save", action="store_true")
