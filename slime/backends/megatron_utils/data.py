@@ -356,6 +356,88 @@ def get_data_iterator(
     )
 
 
+def get_data_iterator_eval(
+    args: Namespace,
+    model: Union[torch.nn.Module, Sequence[torch.nn.Module]],
+    rollout_data: RolloutBatch,
+) -> tuple[list[DataIterator], list[int]]:
+    """
+    Create iterators and a micro-batch schedule for evaluation (PPL computation).
+
+    Similar to get_data_iterator but uses eval_batch_size instead of global_batch_size.
+    """
+    dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
+    dp_group = mpu.get_data_parallel_group()
+    vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
+    if vpp_size is None:
+        vpp_size = 1
+    if vpp_size > 1:
+        from megatron.core.utils import get_model_config
+
+        config = get_model_config(model[0])
+        microbatch_group_size_per_vp_stage = config.microbatch_group_size_per_vp_stage
+    cp_size = mpu.get_context_parallel_world_size()
+
+    num_local_samples = len(rollout_data["total_lengths"])
+    eval_batch_size = args.eval_batch_size or args.global_batch_size
+    num_local_gbs = eval_batch_size // dp_size
+    num_steps_per_rollout = num_local_samples // num_local_gbs
+
+    def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
+        data_iterator = []
+        for _ in range(vpp_size):
+            data_iterator.append(DataIterator(rollout_data, micro_batch_size, micro_batch_indices))
+        return data_iterator
+
+    if not args.use_dynamic_batch_size:
+        num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
+        data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
+    else:
+        assert args.max_tokens_per_gpu is not None
+        # calculate the number of microbatches for each step
+        samples = rollout_data["total_lengths"]
+        assert len(samples) == num_local_samples
+        num_microbatches = []
+        for i in range(num_steps_per_rollout):
+            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
+            num_microbatches.append(
+                get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu * cp_size)
+            )
+
+        num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
+        dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=dp_group)
+
+        if vpp_size > 1:
+            # vpp requires the number of microbatches to be divisible by vpp_size
+            num_microbatches = torch.clamp(
+                num_microbatches // microbatch_group_size_per_vp_stage * microbatch_group_size_per_vp_stage,
+                min=1,
+            )
+
+        num_microbatches = num_microbatches.tolist()
+
+        # balance each micro batch
+        samples = rollout_data["total_lengths"]
+        micro_batch_indices = []
+        for i, num_mbs in enumerate(num_microbatches):
+            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
+            samples = rollout_data["total_lengths"][start:end]
+            partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
+            for j in range(num_mbs):
+                for k in range(len(partitions[j])):
+                    partitions[j][k] += start
+            micro_batch_indices.extend(partitions)
+
+        assert len(set(sum(micro_batch_indices, []))) == num_local_samples
+
+        data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
+
+    return (
+        data_iterator,
+        num_microbatches,
+    )
+
+
 def log_rollout_data(
     rollout_id: int,
     args: Namespace,

@@ -1,9 +1,11 @@
 import logging
+import math
 import os
 import random
 import socket
 from argparse import Namespace
 from contextlib import nullcontext
+from typing import Dict
 
 import ray
 import torch
@@ -29,13 +31,15 @@ from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
+from .data import DataIterator, get_data_iterator, get_data_iterator_eval, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
+
+import slime.kimi  # Register Qwen3KimiConfig
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
@@ -345,6 +349,64 @@ class MegatronTrainRayActor(TrainRayActor):
                 num_microbatches,
                 store_prefix=store_prefix,
             )
+
+    def compute_log_prob(
+        self,
+        rollout_id: int,
+        rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]],
+    ) -> Dict[str, float]:
+        """Compute log probabilities and PPL for SFT-style evaluation.
+
+        Args:
+            rollout_id: The rollout iteration id
+            rollout_data: The evaluation data containing tokens, response_lengths, etc.
+
+        Returns:
+            A dict with 'eval/ppl' and 'eval/step' keys
+        """
+        # Prepare data and run forward pass to get log_probs
+        rollout_data = self._get_rollout_data(rollout_data)
+        data_iterator, num_microbatches = get_data_iterator_eval(self.args, self.model, rollout_data)
+        rollout_data.update(
+            forward_only(
+                get_log_probs_and_entropy,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+            )
+        )
+
+        log_probs = rollout_data['log_probs']
+
+        # Compute total log probability and token count
+        total_log_prob = 0.0
+        total_tokens = 0
+        for lp in log_probs:
+            if lp.numel() == 0:
+                continue
+            total_log_prob += lp.sum().item()
+            total_tokens += lp.numel()
+
+        # Handle edge cases
+        if total_tokens == 0:
+            logger.warning(f"[Rollout {rollout_id}] No tokens found for PPL computation.")
+            ppl = float('inf')
+        else:
+            avg_neg_log_prob = -total_log_prob / total_tokens
+
+            # Clamp to avoid overflow in exp (log(1e308) ≈ 709)
+            clamped_avg = min(avg_neg_log_prob, 700.0)
+            ppl = math.exp(clamped_avg)
+
+            if not math.isfinite(ppl):
+                logger.warning(f"[Rollout {rollout_id}] PPL is not finite: {ppl}")
+                ppl = float('inf')
+
+        return {
+            "eval/ppl": ppl,
+            "eval/step": rollout_id,
+        }
 
     def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         if self.args.offload_train:

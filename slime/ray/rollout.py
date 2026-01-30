@@ -152,6 +152,15 @@ class RolloutManager:
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)
 
+        # 对每个值先进行转换，然后将转换后的结果放入 Ray (用于 PPL 评估)
+        processed_ray_refs = {
+            k: Box(ray.put(self._convert_samples_to_train_data(v["samples"])))
+            for k, v in data.items()
+        }
+
+        # 返回包含 ObjectRefs 的字典
+        return processed_ray_refs
+
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
 

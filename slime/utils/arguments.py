@@ -714,6 +714,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--eval-max-prompt-len", type=int, default=None)
             parser.add_argument("--eval-min-new-tokens", type=int, default=None)
             parser.add_argument("--eval-max-context-len", type=int, default=None)
+            parser.add_argument(
+                "--eval-batch-size",
+                type=int,
+                default=None,
+                help=(
+                    "The batch size for SFT-style evaluation (PPL computation). "
+                    "If not set, will use global_batch_size as default."
+                ),
+            )
 
             return parser
 
