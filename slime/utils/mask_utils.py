@@ -126,7 +126,40 @@ class MultiTurnLossMaskGenerator:
             loss_mask = [0] * len(token_ids)
         return token_ids, loss_mask
 
+    def pre_train_loss_mask(self, text: str) -> tuple[list[int], list[int]]:
+        """Generate loss mask for pretrain mode.
+        
+        Args:
+            text: Raw text string for pretraining
+            
+        Returns:
+            tuple of (token_ids, loss_mask)
+        """
+        # Ensure text has begin/end markers
+        if not text.strip().startswith('<|begin_text|>'):
+            text = '<|begin_text|>' + text
+
+        if not text.strip().endswith('<|end_text|>'):
+            text = text + '<|end_text|>'
+            
+        # Tokenize full text
+        token_ids = self.tokenizer(text, add_special_tokens=False)["input_ids"]
+        prefix_ids = self.tokenizer("<|begin_text|>", add_special_tokens=False)["input_ids"]
+        prefix_len = len(prefix_ids)
+
+        # Build loss mask - prefix part has no loss
+        loss_mask = [0] * prefix_len + [1] * (len(token_ids) - prefix_len)
+
+        return token_ids, loss_mask
+
     def get_loss_mask(self, messages: list[dict], tools: list[dict] = None) -> tuple[list[int], list[int]]:
+        # Support pretrain mode: messages should be a string instead of list[dict]
+        if self.tokenizer_type == "pretrain":
+            if isinstance(messages, str):
+                return self.pre_train_loss_mask(messages)
+            else:
+                raise ValueError("In pretrain mode, messages should be a string, not list[dict]")
+        
         if self.tokenizer_type == "qwen":
             if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
                 return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
