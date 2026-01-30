@@ -306,7 +306,6 @@ def get_qwen3_next_spec(args, config, vp_stage):
     hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
     for layer_id in range(num_layers_to_build):
-        print(hf_config.layer_types[layer_id + offset])
         if hf_config.layer_types[layer_id + offset] == "linear_attention":
             layer_specs = copy.deepcopy(transformer_layer_spec.layer_specs[layer_id])
             layer_specs.submodules.self_attention = ModuleSpec(
@@ -314,6 +313,5 @@ def get_qwen3_next_spec(args, config, vp_stage):
                 params={"args": args},
             )
             transformer_layer_spec.layer_specs[layer_id] = layer_specs
-        transformer_layer_spec.layer_specs[layer_id].submodules.mlp.submodules.shared_experts.params = {"gate": True}
 
     return transformer_layer_spec
