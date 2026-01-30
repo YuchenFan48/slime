@@ -118,6 +118,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The backend for training.",
             )
             parser.add_argument(
+                "--print-model-shape",
+                action="store_true",
+                default=False,
+                help="Print model parameter shapes after model initialization for debugging.",
+            )
+            parser.add_argument(
                 "--qkv-format",
                 type=str,
                 choices=["thd", "bshd"],

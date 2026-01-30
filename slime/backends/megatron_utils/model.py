@@ -33,6 +33,132 @@ from .model_provider import get_model_provider_func, wrap_model_provider_with_fr
 logger = logging.getLogger(__name__)
 
 
+def _format_size(num_params: int) -> str:
+    """Format parameter count in human readable format."""
+    if num_params >= 1e9:
+        return f"{num_params / 1e9:.2f}B"
+    elif num_params >= 1e6:
+        return f"{num_params / 1e6:.2f}M"
+    elif num_params >= 1e3:
+        return f"{num_params / 1e3:.2f}K"
+    else:
+        return str(num_params)
+
+
+def print_model_shape(model: Sequence[DDP], args: Namespace) -> None:
+    """Print model parameter shapes for debugging.
+
+    Only prints on rank 0 to avoid duplicate output.
+
+    Args:
+        model: List of DDP-wrapped model chunks.
+        args: Training arguments.
+    """
+    if mpu.get_data_parallel_rank() != 0:
+        return
+
+    # Get the actual model (unwrap DDP if needed)
+    if isinstance(model, list):
+        model_to_inspect = model[0]
+    else:
+        model_to_inspect = model
+
+    if isinstance(model_to_inspect, DDP):
+        model_to_inspect = model_to_inspect.module
+
+    # Print layer structure first
+    logger.info("=" * 100)
+    logger.info("MODEL LAYER STRUCTURE")
+    logger.info("=" * 100)
+
+    # Find decoder layers and print their structure
+    decoder = None
+    for name, module in model_to_inspect.named_modules():
+        if name == "decoder" or name.endswith(".decoder"):
+            decoder = module
+            break
+
+    if decoder is not None and hasattr(decoder, "layers"):
+        for layer_idx, layer in enumerate(decoder.layers):
+            layer_type = type(layer).__name__
+            # Get attention module type
+            attn_type = "unknown"
+            mlp_type = "dense"
+            if hasattr(layer, "self_attention"):
+                attn_module = layer.self_attention
+                attn_type = type(attn_module).__name__
+            # Get MLP type
+            if hasattr(layer, "mlp"):
+                mlp_module = layer.mlp
+                mlp_type = type(mlp_module).__name__
+            logger.info(f"  Layer {layer_idx:3d}: {layer_type:<30} | Attention: {attn_type:<25} | MLP: {mlp_type}")
+    else:
+        # Fallback: print all named modules with their types
+        for name, module in model_to_inspect.named_modules():
+            if "layers" in name and name.count(".") <= 3:
+                logger.info(f"  {name}: {type(module).__name__}")
+
+    # Print parameter shapes
+    logger.info("")
+    logger.info("=" * 100)
+    logger.info("MODEL PARAMETER SUMMARY (TP rank 0, PP rank 0)")
+    logger.info("=" * 100)
+
+    total_params = 0
+    trainable_params = 0
+    param_info = []
+
+    for name, param in model_to_inspect.named_parameters():
+        num_params = param.numel()
+        total_params += num_params
+        if param.requires_grad:
+            trainable_params += num_params
+        param_info.append((name, tuple(param.shape), num_params, param.requires_grad))
+
+    # Group similar layers
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for name, shape, numel, requires_grad in param_info:
+        parts = name.split(".")
+        if "layers" in parts:
+            idx = parts.index("layers")
+            key = ".".join(parts[:idx] + ["layers.X"] + parts[idx + 2 :])
+        else:
+            key = name
+        groups[key].append((name, shape, numel, requires_grad))
+
+    # Calculate max name length
+    max_name_len = min(max(len(k) + 10 for k in groups.keys()), 70)
+
+    # Print grouped parameters
+    for key, params in groups.items():
+        total = sum(p[2] for p in params)
+        rep_shape = params[0][1]
+        rep_grad = params[0][3]
+        if len(params) > 1:
+            name_display = f"{key} (x{len(params)})"
+        else:
+            name_display = key
+        if len(name_display) > max_name_len:
+            name_display = name_display[: max_name_len - 3] + "..."
+        logger.info(
+            f"  {name_display:<{max_name_len}} {str(rep_shape):<30} {_format_size(total):<12} {'✓' if rep_grad else '✗'}"
+        )
+
+    # Print summary
+    logger.info("-" * 100)
+    logger.info(f"Total Parameters (this rank): {total_params:,} ({_format_size(total_params)})")
+    logger.info(f"Trainable Parameters:         {trainable_params:,} ({_format_size(trainable_params)})")
+
+    # Estimate total params across all ranks
+    tp_size = mpu.get_tensor_model_parallel_world_size()
+    pp_size = mpu.get_pipeline_model_parallel_world_size()
+    ep_size = getattr(args, "expert_model_parallel_size", 1) or 1
+    logger.info(f"Parallelism: TP={tp_size}, PP={pp_size}, EP={ep_size}")
+    logger.info("=" * 100)
+
+
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
     """Create and configure the optimizer learning-rate/weight-decay scheduler.
 
@@ -111,6 +237,10 @@ def setup_model_and_optimizer(
     model = get_model(
         wrap_model_provider_with_freeze(get_model_provider_func(args, role), args), ModelType.encoder_or_decoder
     )
+
+    # Print model shape for debugging (only on rank 0)
+    if getattr(args, "print_model_shape", False):
+        print_model_shape(model, args)
 
     # Optimizer
     kwargs = {}
