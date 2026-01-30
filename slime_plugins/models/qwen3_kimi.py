@@ -259,14 +259,14 @@ class Attention(HuggingfaceAttention):
         config,
         layer_number: int,
         cp_comm_type: str = "p2p",
-        model_comm_pgs=None,
+        pg_collection=None,
     ):
         super().__init__(
             args,
             config,
             layer_number,
             cp_comm_type,
-            model_comm_pgs,
+            pg_collection,
         )
         if Qwen3NextAttention is None:
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
