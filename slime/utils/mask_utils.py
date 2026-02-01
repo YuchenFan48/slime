@@ -153,13 +153,9 @@ class MultiTurnLossMaskGenerator:
         return token_ids, loss_mask
 
     def get_loss_mask(self, messages: list[dict], tools: list[dict] = None) -> tuple[list[int], list[int]]:
-        # Support pretrain mode: messages should be a string instead of list[dict]
-        if self.tokenizer_type == "pretrain":
-            if isinstance(messages, str):
-                return self.pre_train_loss_mask(messages)
-            else:
-                raise ValueError("In pretrain mode, messages should be a string, not list[dict]")
-        
+
+        return self.pre_train_loss_mask(messages)
+
         if self.tokenizer_type == "qwen":
             if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
                 return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)

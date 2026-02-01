@@ -1352,6 +1352,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
+        def add_modelopt_arguments(parser):
+            """
+            Transparently pass through Megatron's modelopt arguments.
+            This includes GPT-OSS, export options, quantization, etc.
+            """
+            try:
+                from megatron.post_training.arguments import add_modelopt_args
+                parser = add_modelopt_args(parser)
+            except ImportError:
+                # If megatron.post_training is not available, skip
+                pass
+            return parser
+             
         def add_mtp_training_arguments(parser):
             """Add MTP training specific arguments."""
             reset_arg(parser, "--mtp-num-layers", type=int, default=None)
@@ -1441,6 +1454,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_prefill_decode_disaggregation_arguments(parser)
         parser = add_ci_arguments(parser)
         parser = add_custom_megatron_plugins_arguments(parser)
+        parser = add_modelopt_arguments(parser)
         reset_arg(
             parser,
             "--custom-config-path",

@@ -14,11 +14,38 @@ from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_layer_with_transformer_engine_spec,
 )
 from megatron.core.transformer.spec_utils import import_module
+from megatron.core.transformer.transformer_block import TransformerBlockSubmodules
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
 from megatron.training.arguments import core_transformer_config_from_args
 
 from slime.utils.misc import load_function
 
+def get_layer_norm_impl_for_normalization(normalization: str, use_te: bool):
+    """
+    Get the appropriate LayerNorm implementation based on normalization type.
+    
+    FusedLayerNorm (from Apex) only supports LayerNorm, not RMSNorm.
+    TENorm (from Transformer Engine) supports both LayerNorm and RMSNorm.
+    WrappedTorchNorm supports both but doesn't support sequence_parallel well.
+    """
+    if normalization == "RMSNorm":
+        # RMSNorm is only supported by TENorm or WrappedTorchNorm
+        try:
+            from megatron.core.extensions.transformer_engine import TENorm
+            return TENorm
+        except ImportError:
+            from megatron.core.transformer.torch_norm import WrappedTorchNorm
+            return WrappedTorchNorm
+    else:
+        # LayerNorm is supported by all implementations
+        if use_te:
+            try:
+                from megatron.core.extensions.transformer_engine import TENorm
+                return TENorm
+            except ImportError:
+                pass
+        return FusedLayerNorm
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
 class LinearForLastLayer(torch.nn.Linear):
@@ -52,7 +79,6 @@ class LinearForLastLayer(torch.nn.Linear):
         if self.sequence_parallel:
             logits = tensor_parallel.gather_from_sequence_parallel_region(logits, tensor_parallel_output_grad=False)
         return logits, None
-
 
 def get_model_provider_func(
     args: argparse.Namespace,
@@ -107,14 +133,57 @@ def get_model_provider_func(
             pre_process (bool, optional): Set to true if you need to compute embedings. Defaults to True.
             post_process (bool, optional): Set to true if you need to want to compute output logits/loss. Defaults to True.
 
-
         Returns:
             Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
         """
         use_te = args.transformer_impl == "transformer_engine"
+        
+        # Handle --export-force-local-attention: force using local DotProductAttention instead of TE
+        # NOTE: Local implementation (WrappedTorchNorm) has limitations:
+        #   - Does not support sequence_parallel
+        #   - Does not support persist_layer_norm
+        # If these features are needed with RMSNorm, we fall back to TE
+        if getattr(args, 'export_force_local_attention', False):
+            from megatron.training import print_rank_0
+            
+            # Check if local implementation is compatible with current config
+            if args.normalization == "RMSNorm" and args.sequence_parallel:
+                print_rank_0(
+                    "WARNING: --export-force-local-attention with RMSNorm + sequence_parallel is not supported. "
+                    "WrappedTorchNorm doesn't support sequence_parallel. "
+                    "Falling back to Transformer Engine implementation."
+                )
+                # Keep use_te = True (don't override)
+            else:
+                print_rank_0("export-force-local-attention enabled: Using local DotProductAttention instead of TEDotProductAttention")
+                use_te = False
 
         # Experimental loading arguments from yaml
         config: TransformerConfig = core_transformer_config_from_args(args)
+
+        # When using local implementation (not TE) with RMSNorm, disable persist_layer_norm
+        # because WrappedTorchNorm doesn't support it
+        if not use_te and args.normalization == "RMSNorm":
+            from megatron.training import print_rank_0
+            if config.persist_layer_norm:
+                print_rank_0("Using local spec with RMSNorm: Disabling persist_layer_norm (not supported by WrappedTorchNorm)")
+                config.persist_layer_norm = False
+
+        # Handle GPT-OSS mode with YaRN RoPE configuration
+        if getattr(args, 'enable_gpt_oss', False):
+            from megatron.training import print_rank_0
+            print_rank_0("GPT-OSS mode enabled: Configuring YaRN RoPE parameters")
+            # Set GPT-OSS YaRN values directly on the config
+            # These defaults are based on Huggingface GPT-OSS configurations
+            args.position_embedding_type = "yarn"
+            config.position_embedding_type = "yarn"
+            config.yarn_rotary_scaling_factor = 32.0
+            config.yarn_original_max_position_embeddings = 131072
+            config.yarn_beta_fast = 32.0
+            config.yarn_beta_slow = 1.0
+            config.yarn_mscale = 1.0
+            config.yarn_mscale_all_dim = 0.0
+            config.yarn_correction_range_round_to_int = False
 
         if args.spec is not None:
             transformer_layer_spec = import_module(args.spec)
@@ -126,10 +195,23 @@ def get_model_provider_func(
                 # Define the decoder block spec
                 kwargs = {
                     "use_transformer_engine": use_te,
+                    "normalization": args.normalization,  # Required for RMSNorm support
                 }
                 if vp_stage is not None:
                     kwargs["vp_stage"] = vp_stage
                 transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
+                
+                # Fix layer_norm if it doesn't support the requested normalization type
+                # FusedLayerNorm only supports LayerNorm, not RMSNorm
+                if isinstance(transformer_layer_spec, TransformerBlockSubmodules):
+                    from megatron.training import print_rank_0
+                    current_ln = transformer_layer_spec.layer_norm
+                    print_rank_0(f"TransformerBlockSubmodules.layer_norm = {current_ln}, normalization = {args.normalization}")
+                    
+                    if current_ln is FusedLayerNorm and args.normalization == "RMSNorm":
+                        correct_layer_norm = get_layer_norm_impl_for_normalization(args.normalization, use_te)
+                        print_rank_0(f"Replacing FusedLayerNorm with {correct_layer_norm.__name__} for RMSNorm support")
+                        transformer_layer_spec.layer_norm = correct_layer_norm
             else:
                 # Define the decoder layer spec
                 if use_te:
@@ -139,6 +221,7 @@ def get_model_provider_func(
                         qk_layernorm=args.qk_layernorm,
                         multi_latent_attention=args.multi_latent_attention,
                         moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
+                        normalization=args.normalization,  # Required for RMSNorm support
                     )
                 else:
                     transformer_layer_spec = get_gpt_layer_local_spec(
@@ -147,6 +230,7 @@ def get_model_provider_func(
                         qk_layernorm=args.qk_layernorm,
                         multi_latent_attention=args.multi_latent_attention,
                         moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
+                        normalization=args.normalization,  # Required for RMSNorm support
                     )
 
         build_model_context = nullcontext
@@ -207,7 +291,6 @@ def get_model_provider_func(
 
     return model_provider
 
-
 def wrap_model_provider_with_freeze(original_provider, args):
     def wrapped_provider(pre_process=True, post_process=True, vp_stage=None):
         sig = inspect.signature(original_provider)
@@ -221,7 +304,6 @@ def wrap_model_provider_with_freeze(original_provider, args):
         return model
 
     return wrapped_provider
-
 
 def freeze_model_params(model: GPTModel, args: argparse.Namespace):
     if args.only_train_params_name_list:

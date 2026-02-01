@@ -15,6 +15,7 @@ from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import RolloutBatch
+from typing import Union
 
 from ...utils import logging_utils
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
@@ -70,6 +71,7 @@ def get_batch(
         assert max([t.size(0) for t in tokens]) <= max_seqlen
         tokens = [slice_with_cp(t, pad_token_id, qkv_format, max_seqlen) for t in tokens]
         tokens = torch.stack(tokens)
+        packed_seq_params = None
     elif qkv_format == "thd":
         tokens = [slice_with_cp(t, pad_token_id, qkv_format) for t in tokens]
 
