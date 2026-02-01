@@ -11,9 +11,9 @@ echo "================================================================"
 
 MODEL_PREFIX=$1
 if [ -z "$MODEL_PREFIX" ]; then
-  VERL_TRAIN_SCRIPT="/apdcephfs/mnt/cephfs/users/yuchenfan/slime/scripts/run-qwen3-next-4m.sh"
+  VERL_TRAIN_SCRIPT="/apdcephfs/mnt/cephfs/users/yuchenfan/slime/scripts/run-gpt-oss-mgt.sh"
 else
-  VERL_TRAIN_SCRIPT="/apdcephfs/mnt/cephfs/users/yuchenfan/slime/scripts/run-qwen3-next-4m.sh"
+  VERL_TRAIN_SCRIPT="/apdcephfs/mnt/cephfs/users/yuchenfan/slime/scripts/run-gpt-oss-mgt.sh"
 fi
 
 

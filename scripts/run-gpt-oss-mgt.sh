@@ -98,20 +98,24 @@ MODEL_ARGS=(
     --quick-geglu 
     --glu-linear-offset 1.0 
    #  --softmax-type learnable 
-   #  --window-attn-skip-freq 2 
+    --window-attn-skip-freq 2 
     --activation-func-clamp-value 7.0 
-   #  --window-size 128,0
+    --window-size 128,0
     --enable-gpt-oss
-    --num-experts 32
-    --moe-router-load-balancing-type none # options: aux_loss, sinkhorn, None. Default is aux_loss.
-    --moe-router-topk 2
-    --moe-aux-loss-coeff 0.0
-   #  --moe-grouped-gemm
-    --moe-permute-fusion
-    --moe-ffn-hidden-size 512
-    --moe-router-dtype fp32
-    --moe-token-dispatcher-type alltoall
-    --moe-router-score-function softmax
+   --moe-ffn-hidden-size 512
+   --moe-shared-expert-intermediate-size 512
+   --moe-router-score-function softmax
+   --moe-token-dispatcher-type alltoall
+   --moe-router-topk 2
+   --moe-layer-freq $MOE_LAYER_FREQ
+   --num-experts 32
+   --moe-grouped-gemm
+   --moe-token-drop-policy probs
+   --moe-router-dtype fp32
+   --moe-permute-fusion
+   --moe-aux-loss-coeff 0.001
+   --post-self-attn-layernorm
+   --post-mlp-layernorm
 )
 
 CKPT_ARGS=(
