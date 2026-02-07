@@ -27,7 +27,7 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-NLAYERS=14
+NLAYERS=28
 FIRST_K_DENSE_REPLACE=0
 
 arr=()
@@ -62,12 +62,12 @@ printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
 
 GDN_ARGS=(
    --experimental-attention-variant gated_delta_net
-   --linear-attention-freq 3
+   --linear-attention-freq 4
    --linear-conv-kernel-dim 4
-   --linear-key-head-dim 64
-   --linear-value-head-dim 64
-   --linear-num-key-heads 4
-   --linear-num-value-heads 8
+   --linear-key-head-dim 128
+   --linear-value-head-dim 128
+   --linear-num-key-heads 16
+   --linear-num-value-heads 16
 )
 
 # 基础模型参数 (以 GPT-small 为例，请根据实际模型调整)
@@ -78,7 +78,7 @@ MODEL_ARGS=(
    --group-query-attention
    --num-query-groups 2
    --kv-channels 128
-   --num-layers 14
+   --num-layers 28
    --hidden-size 1024
    --ffn-hidden-size 3072
    --use-gated-attention
@@ -109,7 +109,7 @@ MODEL_ARGS=(
    --moe-aux-loss-coeff 0.001
    --post-self-attn-layernorm
    --post-mlp-layernorm
-   --mtp-num-layers 1
+   # --mtp-num-layers 1
 )
 
 CKPT_ARGS=(
@@ -121,8 +121,9 @@ CKPT_ARGS=(
    --data-source-path slime.ray.rollout_data_source.RolloutDataSourceMultiFileWithBuffer
    --random-init
    --print-model-shape
-   --qkv-format bshd
-   --micro-batch-size 2
+   # --gated-delta-net-cp-mode sequence_parallel
+   # --qkv-format bshd
+   # --micro-batch-size 16
 )
 
 SFT_ARGS=(
@@ -149,12 +150,14 @@ EVAL_ARGS=(
 ) 
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
+   --use-dynamic-batch-size
+   --max-tokens-per-gpu 12800
 
    # --recompute-granularity full
    # --recompute-method uniform

@@ -1,3 +1,179 @@
+import copy
+import logging
+from typing import Any
+
+from slime.utils.data import Dataset
+from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+from slime.utils.processing_utils import load_processor, load_tokenizer
+from slime.utils.types import Sample
+
+__all__ = ["generate_rollout", "eval_rollout"]
+
+logger = logging.getLogger(__name__)
+
+TOKENIZER = None
+PROCESSOR = None
+MASK_GENERATOR = None
+SAMPLE_PRINTED = False
+EVAL_PROMPT_DATASET = {}
+EVAL_PROCESSED_SAMPLES = {}  # Cache for processed evaluation samples
+
+def eval_rollout(args, rollout_id: int) -> dict[str, dict[str, list[Any]]]:
+    """Generate SFT-style evaluation data for multiple datasets.
+
+    Args:
+        args: The argument namespace
+        rollout_id: The rollout iteration id
+
+    Returns:
+        A dict mapping dataset names to {"samples": processed_samples}
+    """
+    global TOKENIZER, PROCESSOR, MASK_GENERATOR
+    if TOKENIZER is None:
+        TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+    if PROCESSOR is None:
+        PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
+    if MASK_GENERATOR is None:
+        MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
+
+    results = {}
+    for i in range(0, len(args.eval_prompt_data), 2):
+        name, path = args.eval_prompt_data[i : i + 2]
+        logger.info(f"Loading eval dataset: {name}...")
+        results.update(eval_rollout_single_dataset(args, rollout_id, name, path))
+    return results
+
+def eval_rollout_single_dataset(
+    args, rollout_id: int, name: str, path: str
+) -> dict[str, dict[str, list[Any]]]:
+    """Generate SFT-style evaluation data for a single dataset.
+
+    Args:
+        args: The argument namespace
+        rollout_id: The rollout iteration id
+        name: Dataset name
+        path: Path to the dataset file
+
+    Returns:
+        A dict mapping dataset name to processed samples
+    """
+    global EVAL_PROMPT_DATASET, EVAL_PROCESSED_SAMPLES
+
+    # Return cached samples if already processed
+    if name in EVAL_PROCESSED_SAMPLES:
+        logger.info(f"Using cached processed samples for {name}")
+        return {name: {"samples": EVAL_PROCESSED_SAMPLES[name]}}
+
+    # Load dataset if not already loaded
+    if name not in EVAL_PROMPT_DATASET:
+        logger.info(f"Loading dataset {name} from {path}")
+        EVAL_PROMPT_DATASET[name] = Dataset(
+            path,
+            tokenizer=TOKENIZER,
+            processor=PROCESSOR,
+            max_length=args.rollout_max_prompt_len,
+            prompt_key=args.input_key if args.eval_input_key is None else args.eval_input_key,
+            label_key=args.label_key if args.eval_label_key is None else args.eval_label_key,
+            multimodal_keys=args.multimodal_keys,
+            metadata_key=args.metadata_key,
+            tool_key=args.tool_key if args.eval_tool_key is None else args.eval_tool_key,
+            apply_chat_template=args.apply_chat_template,
+        )
+
+    dataset = EVAL_PROMPT_DATASET[name]
+
+    samples = []
+    prompt_samples = dataset.samples
+    sample_index = 0
+    for prompt_sample in prompt_samples:
+        group = []
+        for _ in range(args.n_samples_per_prompt):
+            sample = copy.deepcopy(prompt_sample)
+            sample.index = sample_index
+            sample_index += 1
+            group.append(sample)
+        samples.append(group)
+
+    # Process each sample to generate tokens and loss_mask
+    for sample in samples:
+        (sample,) = sample
+        messages = sample.prompt
+        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages)
+        response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
+
+        sample.tokens = token_ids
+        sample.response_length = response_length
+        sample.reward = 0
+        sample.loss_mask = loss_mask[-response_length:]
+
+    # Flatten sample list
+    while isinstance(samples[0], list):
+        samples = sum(samples, [])
+
+    # Trim samples to match batch size
+    eval_batch_size = args.eval_batch_size or args.global_batch_size
+    if eval_batch_size and len(samples) % eval_batch_size != 0:
+        trim_len = (len(samples) // eval_batch_size) * eval_batch_size
+        origin_data_length = len(samples)
+        samples = samples[:trim_len]
+        logger.info(f"Trimmed eval samples from {origin_data_length} to {trim_len}")
+
+    # Cache processed samples
+    EVAL_PROCESSED_SAMPLES[name] = samples
+
+    return {name: {"samples": samples}}
+
+def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
+    """An example to implement the generate_rollout function for an rule based rm rollout generation.
+
+    Args:
+        args: the whole args
+        rollout_id: int, the id of the rollout, used for deterministic data generation
+        data_buffer: the data buffer to store the generated samples
+        evaluation: bool, whether the rollout is for evaluation or not
+
+    Returns:
+        list[Sample]: a list of samples generated by the rollout
+    """
+    assert args.rollout_global_dataset
+
+    # Handle SFT-style evaluation (PPL computation)
+    if evaluation:
+        return eval_rollout(args, rollout_id)
+
+    global TOKENIZER, PROCESSOR, MASK_GENERATOR, SAMPLE_PRINTED
+    if TOKENIZER is None:
+        TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+
+    if PROCESSOR is None:
+        PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
+
+    if MASK_GENERATOR is None:
+        MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
+
+    samples = data_buffer.get_samples(args.rollout_batch_size)
+
+    for i, sample in enumerate(samples):
+        (sample,) = sample
+        messages = sample.prompt
+        tools = sample.metadata.get("tools", None)
+
+        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+
+        response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
+
+        sample.tokens = token_ids
+        sample.response_length = response_length
+        sample.reward = 0
+        sample.loss_mask = loss_mask[-response_length:]
+
+        if i == 0 and not SAMPLE_PRINTED:
+            logger.info(
+                f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
+            )
+            SAMPLE_PRINTED = True
+
+    return samples
 import itertools
 import logging
 import multiprocessing
@@ -37,7 +213,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
-
 
 @ray.remote
 class RolloutManager:
@@ -140,9 +315,10 @@ class RolloutManager:
         return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
     def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
+        # Allow PPL eval even when debug_train_only is set, as long as eval_datasets is configured
+        if self.args.debug_train_only and not self.args.eval_datasets:
+            # if debug train only and no eval datasets configured, skip evaluation
+            return None
         self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
@@ -152,13 +328,16 @@ class RolloutManager:
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)
 
-        # 对每个值先进行转换，然后将转换后的结果放入 Ray (用于 PPL 评估)
-        processed_ray_refs = {
-            k: Box(ray.put(self._convert_samples_to_train_data(v["samples"])))
-            for k, v in data.items()
-        }
+        # 对每个数据集进行转换，然后按 DP size 分割数据
+        dp_size = self.train_parallel_config["dp_size"]
+        processed_ray_refs = {}
+        for k, v in data.items():
+            train_data = self._convert_samples_to_train_data(v["samples"])
+            # 按 DP size 分割数据，返回 list of Box
+            split_data = self._split_train_data_by_dp(train_data, dp_size)
+            processed_ray_refs[k] = split_data
 
-        # 返回包含 ObjectRefs 的字典
+        # 返回包含 ObjectRefs 的字典，每个 value 是一个 list of Box
         return processed_ray_refs
 
     def save(self, rollout_id):
@@ -458,7 +637,6 @@ class RolloutManager:
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 
-
 def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
         return 0
@@ -544,7 +722,6 @@ def init_rollout_engines(args, pg, all_rollout_engines):
 
     return num_new_engines
 
-
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
     addr_and_ports = []
     for rank, _ in rollout_engines:
@@ -559,7 +736,6 @@ def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
             )
         )
     return addr_and_ports
-
 
 def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout_engines):
     # get ports
@@ -639,7 +815,6 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
 
     return addr_and_ports
 
-
 def _start_router(args):
     """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
@@ -683,7 +858,6 @@ def _start_router(args):
     assert process.is_alive()
     logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
 
-
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
     if args.custom_eval_rollout_log_function_path is not None:
         custom_log_func = load_function(args.custom_eval_rollout_log_function_path)
@@ -692,7 +866,9 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
     log_dict = extra_metrics or {}
     for key in data.keys():
-        rewards = data[key]["rewards"]
+        rewards = data[key]["rewards"] if "is_rewards" in data[key] else []
+        if not rewards:
+            continue
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
         if (samples := data[key].get("samples")) is not None:
             log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), f"eval/{key}/")
@@ -716,7 +892,6 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
     return log_dict
 
-
 def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
     if args.custom_rollout_log_function_path is not None:
         custom_log_func = load_function(args.custom_rollout_log_function_path)
@@ -734,7 +909,6 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     log_dict["rollout/step"] = step
     logging_utils.log(args, log_dict, step_key="rollout/step")
 
-
 def compute_metrics_from_samples(args, samples):
     response_lengths = [sample.effective_response_length for sample in samples]
 
@@ -745,7 +919,6 @@ def compute_metrics_from_samples(args, samples):
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
-
 
 def compute_perf_metrics_from_samples(args, samples, rollout_time):
     non_generation_time = [sample.non_generation_time for sample in samples]
@@ -779,7 +952,6 @@ def compute_perf_metrics_from_samples(args, samples, rollout_time):
 
     return log_dict
 
-
 def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     # only compute in GRPO-like algorithms where one prompt has multiple responses
     if args.advantage_estimator == "ppo":
@@ -796,7 +968,6 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
 
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
-
 def _compute_spec_metrics(args, all_samples: list[Sample]):
     if args.sglang_speculative_algorithm is None:
         return {}
@@ -805,7 +976,6 @@ def _compute_spec_metrics(args, all_samples: list[Sample]):
     metrics["spec_accept_rate"] = sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
     metrics["spec_accept_length"] = sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
     return metrics
-
 
 def _compute_prefix_cache_metrics(args, all_samples: list[Sample]):
     num_samples = len(all_samples)
@@ -816,7 +986,6 @@ def _compute_prefix_cache_metrics(args, all_samples: list[Sample]):
     metrics["prefix_cache_hit_rate"] = total_cached_tokens / total_prompt_tokens if total_prompt_tokens > 0 else 0.0
     metrics["avg_cached_tokens_per_sample"] = total_cached_tokens / num_samples
     return metrics
-
 
 def _compute_reward_cat_metrics(args, all_samples: list[Sample]):
     reward_cat_key = args.log_reward_category

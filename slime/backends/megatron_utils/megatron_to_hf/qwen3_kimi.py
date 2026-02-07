@@ -50,11 +50,133 @@ def _convert_layer_internal(args, layer_prefix, rest, param):
         return [(f"{layer_prefix}.self_attn.k_norm.weight", param)]
 
     # === [Attention] Kimi 特有的 Linear Attention ===
-    # 匹配 self_attention.linear_attn.xxx
+    # 匹配 self_attention.linear_attn.xxx (slime-plugins 路径)
     if rest.startswith("self_attention.linear_attn."):
         sub_name = rest[len("self_attention.") :]
         # 直接映射: q_proj, k_proj, v_proj, o_proj, q/k/v_conv1d, f_a/b_proj, A_log, dt_bias 等
         return [(f"{layer_prefix}.{sub_name}", param)]
+    
+    # === [Attention] Megatron 原生 KDA 参数 (直接在 self_attention 下) ===
+    # 处理 MGT 直接初始化的 KDA 参数，名称为 self_attention.A_log 而不是 self_attention.linear_attn.A_log
+    
+    # A_log 需要特殊处理形状: MGT 是 (num_heads,), HF 期望 (1, 1, num_heads, 1)
+    if rest == "self_attention.A_log":
+        # Reshape from (num_heads,) to (1, 1, num_heads, 1) for HF compatibility
+        param_reshaped = param.view(1, 1, -1, 1)
+        return [(f"{layer_prefix}.linear_attn.A_log", param_reshaped)]
+    
+    # dt_bias 和其他参数直接映射 (形状兼容)
+    megatron_kda_params = {
+        "self_attention.dt_bias": "linear_attn.dt_bias",
+        "self_attention.f_a_proj.weight": "linear_attn.f_a_proj.weight",
+        "self_attention.f_b_proj.weight": "linear_attn.f_b_proj.weight",
+        "self_attention.g_a_proj.weight": "linear_attn.g_a_proj.weight",
+        "self_attention.g_b_proj.weight": "linear_attn.g_b_proj.weight",
+        "self_attention.out_norm.weight": "linear_attn.o_norm.weight",
+        "self_attention.out_norm.bias": "linear_attn.o_norm.bias",
+    }
+    if rest in megatron_kda_params:
+        hf_name = megatron_kda_params[rest]
+        return [(f"{layer_prefix}.{hf_name}", param)]
+    
+    # === [Attention] Megatron 原生 KDA in_proj/out_proj/conv1d 参数 ===
+    # 注意: sharded_state_dict 会将参数拆分并添加后缀 (.query, .key, .value, .beta)
+    
+    # in_proj 的 fused layer norm 权重 -> input_layernorm
+    if rest == "self_attention.in_proj.layer_norm_weight":
+        return [(f"{layer_prefix}.input_layernorm.weight", param)]
+    if rest == "self_attention.in_proj.layer_norm_bias":
+        return [(f"{layer_prefix}.input_layernorm.bias", param)]
+    
+    # in_proj.weight 已被拆分为 .query, .key, .value, .beta
+    megatron_kda_in_proj_mapping = {
+        "self_attention.in_proj.weight.query": "linear_attn.q_proj.weight",
+        "self_attention.in_proj.weight.key": "linear_attn.k_proj.weight",
+        "self_attention.in_proj.weight.value": "linear_attn.v_proj.weight",
+        "self_attention.in_proj.weight.beta": "linear_attn.b_proj.weight",
+    }
+    if rest in megatron_kda_in_proj_mapping:
+        hf_name = megatron_kda_in_proj_mapping[rest]
+        return [(f"{layer_prefix}.{hf_name}", param)]
+    
+    # 兼容未拆分的 in_proj.weight (如果使用非 sharded checkpoint)
+    if rest == "self_attention.in_proj.weight":
+        try:
+            head_dim = args.linear_value_head_dim
+            num_heads = args.linear_num_value_heads
+            qk_dim = args.linear_key_head_dim * args.linear_num_key_heads
+            v_dim = head_dim * num_heads
+            
+            q_weight, k_weight, v_weight, beta_weight = torch.split(
+                param, [qk_dim, qk_dim, v_dim, num_heads], dim=0
+            )
+            return [
+                (f"{layer_prefix}.linear_attn.q_proj.weight", q_weight),
+                (f"{layer_prefix}.linear_attn.k_proj.weight", k_weight),
+                (f"{layer_prefix}.linear_attn.v_proj.weight", v_weight),
+                (f"{layer_prefix}.linear_attn.b_proj.weight", beta_weight),
+            ]
+        except:
+            raise ValueError(f"Cannot split in_proj.weight without linear attention config. Shape: {param.shape}")
+    
+    if rest == "self_attention.out_proj.weight":
+        return [(f"{layer_prefix}.linear_attn.o_proj.weight", param)]
+    
+    # in_proj.bias 和 out_proj.bias - HF KimiDeltaAttention 使用 bias=False
+    # 如果 MGT 有 bias，跳过并警告
+    if rest.startswith("self_attention.in_proj.bias"):
+        print(f"[WARNING] Skipping {rest} - HF KimiDeltaAttention uses bias=False for projections")
+        return []
+    
+    if rest == "self_attention.out_proj.bias":
+        print(f"[WARNING] Skipping out_proj.bias - HF KimiDeltaAttention uses bias=False for projections")
+        return []
+    
+    # conv1d.weight/bias 已被拆分为 .query, .key, .value
+    megatron_kda_conv1d_mapping = {
+        "self_attention.conv1d.weight.query": "linear_attn.q_conv1d.weight",
+        "self_attention.conv1d.weight.key": "linear_attn.k_conv1d.weight",
+        "self_attention.conv1d.weight.value": "linear_attn.v_conv1d.weight",
+        "self_attention.conv1d.bias.query": "linear_attn.q_conv1d.bias",
+        "self_attention.conv1d.bias.key": "linear_attn.k_conv1d.bias",
+        "self_attention.conv1d.bias.value": "linear_attn.v_conv1d.bias",
+    }
+    if rest in megatron_kda_conv1d_mapping:
+        hf_name = megatron_kda_conv1d_mapping[rest]
+        return [(f"{layer_prefix}.{hf_name}", param)]
+    
+    # 兼容未拆分的 conv1d.weight/bias (如果使用非 sharded checkpoint)
+    if rest == "self_attention.conv1d.weight":
+        try:
+            head_dim = args.linear_value_head_dim
+            num_heads = args.linear_num_value_heads
+            qk_dim = args.linear_key_head_dim * args.linear_num_key_heads
+            v_dim = head_dim * num_heads
+            
+            q_conv, k_conv, v_conv = torch.split(param, [qk_dim, qk_dim, v_dim], dim=0)
+            return [
+                (f"{layer_prefix}.linear_attn.q_conv1d.weight", q_conv),
+                (f"{layer_prefix}.linear_attn.k_conv1d.weight", k_conv),
+                (f"{layer_prefix}.linear_attn.v_conv1d.weight", v_conv),
+            ]
+        except:
+            raise ValueError(f"Cannot split conv1d.weight without linear attention config. Shape: {param.shape}")
+    
+    if rest == "self_attention.conv1d.bias":
+        try:
+            head_dim = args.linear_value_head_dim
+            num_heads = args.linear_num_value_heads
+            qk_dim = args.linear_key_head_dim * args.linear_num_key_heads
+            v_dim = head_dim * num_heads
+            
+            q_bias, k_bias, v_bias = torch.split(param, [qk_dim, qk_dim, v_dim], dim=0)
+            return [
+                (f"{layer_prefix}.linear_attn.q_conv1d.bias", q_bias),
+                (f"{layer_prefix}.linear_attn.k_conv1d.bias", k_bias),
+                (f"{layer_prefix}.linear_attn.v_conv1d.bias", v_bias),
+            ]
+        except:
+            raise ValueError(f"Cannot split conv1d.bias without linear attention config. Shape: {param.shape}")
 
     # === [Attention] 标准 Self Attention (Full Attention) ===
     # 处理 QKV 权重切分 (Megatron 格式 -> HF 格式)

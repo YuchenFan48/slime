@@ -11,7 +11,6 @@ __all__ = ["generate_rollout", "eval_rollout"]
 
 logger = logging.getLogger(__name__)
 
-
 TOKENIZER = None
 PROCESSOR = None
 MASK_GENERATOR = None
@@ -19,8 +18,7 @@ SAMPLE_PRINTED = False
 EVAL_PROMPT_DATASET = {}
 EVAL_PROCESSED_SAMPLES = {}  # Cache for processed evaluation samples
 
-
-def eval_rollout(args, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
+def eval_rollout(args, rollout_id: int) -> dict[str, dict[str, list[Any]]]:
     """Generate SFT-style evaluation data for multiple datasets.
 
     Args:
@@ -28,12 +26,13 @@ def eval_rollout(args, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]]
         rollout_id: The rollout iteration id
 
     Returns:
-        A tuple of (dataset_samples_dict, empty_list)
-        where dataset_samples_dict maps dataset names to their processed samples
+        A dict mapping dataset names to {"samples": processed_samples}
     """
-    global TOKENIZER, MASK_GENERATOR
+    global TOKENIZER, PROCESSOR, MASK_GENERATOR
     if TOKENIZER is None:
         TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+    if PROCESSOR is None:
+        PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
     if MASK_GENERATOR is None:
         MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
 
@@ -42,8 +41,7 @@ def eval_rollout(args, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]]
         name, path = args.eval_prompt_data[i : i + 2]
         logger.info(f"Loading eval dataset: {name}...")
         results.update(eval_rollout_single_dataset(args, rollout_id, name, path))
-    return results, []
-
+    return results
 
 def eval_rollout_single_dataset(
     args, rollout_id: int, name: str, path: str
@@ -64,7 +62,7 @@ def eval_rollout_single_dataset(
     # Return cached samples if already processed
     if name in EVAL_PROCESSED_SAMPLES:
         logger.info(f"Using cached processed samples for {name}")
-        return {name: EVAL_PROCESSED_SAMPLES[name]}
+        return {name: {"samples": EVAL_PROCESSED_SAMPLES[name]}}
 
     # Load dataset if not already loaded
     if name not in EVAL_PROMPT_DATASET:
@@ -72,6 +70,7 @@ def eval_rollout_single_dataset(
         EVAL_PROMPT_DATASET[name] = Dataset(
             path,
             tokenizer=TOKENIZER,
+            processor=PROCESSOR,
             max_length=args.rollout_max_prompt_len,
             prompt_key=args.input_key if args.eval_input_key is None else args.eval_input_key,
             label_key=args.label_key if args.eval_label_key is None else args.eval_label_key,
@@ -122,8 +121,7 @@ def eval_rollout_single_dataset(
     # Cache processed samples
     EVAL_PROCESSED_SAMPLES[name] = samples
 
-    return {name: samples}
-
+    return {name: {"samples": samples}}
 
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
