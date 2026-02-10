@@ -29,8 +29,12 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func, wrap_model_provider_with_freeze
+from .moe_router_tracker import MoERouterTracker
+from megatron.core.transformer.moe.moe_utils import track_moe_metrics
 
 logger = logging.getLogger(__name__)
+
+_moe_router_tracker: MoERouterTracker | None = None
 
 
 def _format_size(num_params: int) -> str:
@@ -639,6 +643,7 @@ def train(
         num_microbatches (Sequence[int]): Microbatches per step in the rollout.
     """
     args = get_args()
+    global _moe_router_tracker
 
     for iterator in data_iterator:
         iterator.reset()
@@ -716,6 +721,18 @@ def train(
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
 
+        accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
+        should_track_moe_router_metrics = accumulated_step_id % args.moe_router_tracker_interval == 0
+        
+        if args.use_moe_router_tracker and should_track_moe_router_metrics:
+            logger.info(f"Tracking MoE router metrics for step {accumulated_step_id}")
+            # Use a long-lived global tracker to avoid repeatedly registering hooks
+            # on the same router modules when ``train`` is invoked multiple times.
+            if _moe_router_tracker is None:
+                _moe_router_tracker = MoERouterTracker(args)
+            moe_router_tracker = _moe_router_tracker
+            moe_router_tracker.register_hooks(model)
+        
         # Run training step.
         loss_dict, grad_norm = train_one_step(
             args,
@@ -758,6 +775,42 @@ def train(
 
                     check_mtp_loss(mtp_losses)
 
+        if args.use_moe_router_tracker and should_track_moe_router_metrics:
+            moe_router_tracker_metrics = moe_router_tracker.get_metrics()
+            # Reset on every rank to ensure per-step-local metrics.
+            moe_router_tracker.reset()
+            moe_router_tracker.remove_hooks()
+
+        if args.num_experts is not None:
+            logger.info(f"Performing moe load balancing tracking for step {accumulated_step_id}")
+            moe_stats = {}
+            moe_loss_scale = 1 / num_microbatches[step_id]
+            
+            track_names = ["load_balancing_loss"]
+            if "seq_aux_loss" in args.moe_router_load_balancing_type:
+                track_names.append("seq_load_balancing_loss")
+            if getattr(args, "moe_z_loss_coeff", None) is not None:
+                track_names.append("z_loss")
+            
+            if getattr(args, "is_hybrid_model", False):
+                num_layers = args.hybrid_override_pattern.count('E')
+            else:
+                num_layers = args.num_layers
+
+            track_moe_metrics(
+                loss_scale=moe_loss_scale,
+                iteration=accumulated_step_id,
+                writer=None,
+                wandb_writer=None,
+                total_loss_dict=moe_stats,
+                per_layer_logging=args.moe_per_layer_logging,
+                force_initialize=True,
+                track_names=track_names,
+                num_layers=num_layers,
+                moe_layer_freq=args.moe_layer_freq,
+                mtp_num_layers=getattr(args, 'mtp_num_layers', 0),
+            )
+
         # per train step log.
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -777,6 +830,16 @@ def train(
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
+
+            if args.use_moe_router_tracker and should_track_moe_router_metrics:
+                for key, val in moe_router_tracker_metrics.items():
+                    val_item = val.item() if isinstance(val, torch.Tensor) else val
+                    log_dict[f"train/{role_tag}{key}"] = val_item
+
+            if args.num_experts is not None:
+                for key, val in moe_stats.items():
+                    val_item = val.item() if isinstance(val, torch.Tensor) else val
+                    log_dict[f"train/{role_tag}{key}"] = val_item
 
             log_dict["train/step"] = accumulated_step_id
             logging_utils.log(args, log_dict, step_key="train/step")

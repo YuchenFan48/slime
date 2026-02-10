@@ -220,6 +220,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                         """,
             )
 
+            parser.add_argument(
+                "--use-moe-router-tracker",
+                action="store_true",
+                default=False,
+                help="Enable MoE Router Tracker for tracking the MoE Metrics."
+            )
+            parser.add_argument(
+                "--moe-router-tracker-interval",
+                type=int,
+                default=1,
+                help="Interval for logging MoE Router Tracker metrics.",
+            )
+
             return parser
 
         # rollout
@@ -1792,6 +1805,9 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
+
+    if args.use_moe_router_tracker:
+        assert args.num_experts is not None, "MoE layer is required to use moe router tracker"
 
 
 def hf_validate_args(args, hf_config):
