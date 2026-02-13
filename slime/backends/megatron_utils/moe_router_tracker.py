@@ -26,7 +26,7 @@ class MoERouterTracker:
         Initialize the tracker.
         """
         self.num_experts = args.num_experts
-        self.num_zero_experts = getattr(args, 'num_zero_experts', 0)
+        self.num_zero_experts = getattr(args, 'num_zero_experts', None) or 0
         self.total_experts = self.num_experts + self.num_zero_experts
         self.top_k = args.moe_router_topk
         
